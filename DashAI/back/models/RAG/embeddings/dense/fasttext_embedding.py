@@ -77,12 +77,6 @@ class FastTextEmbedding(BaseDenseEmbedding):
         model_path = hf_hub_download(repo_id=self.model_name, filename="model.bin")
         self.model = fasttext.load_model(model_path)
 
-    def save(self):
-        """No-op. The model is loaded from HF Hub on demand."""
-
-    def train(self, **kwargs):
-        """No-op. Pre-trained FastText vectors are used as-is."""
-
     def encode(self, text: str) -> np.ndarray:
         """Encode a single text by averaging/max-pooling its word vectors.
 

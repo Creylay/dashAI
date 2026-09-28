@@ -224,9 +224,3 @@ class DistilBERTEmbedding(BaseDenseEmbedding):
             A ``(batch, embedding_dim)`` float32 NumPy array.
         """
         return self._embedding.batch_encode(texts)
-
-    def save(self):
-        """No-op. Persistence is handled externally."""
-
-    def train(self, **kwargs):
-        """No-op. Pre-trained models are used as-is."""

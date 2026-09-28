@@ -30,12 +30,6 @@ class HuggingFaceEmbedding(BaseDenseEmbedding):
         self.model = None
         self.tokenizer = None
 
-    def save(self):
-        """No-op. Persistence is handled externally."""
-
-    def train(self, **kwargs):
-        """No-op. Pre-trained models are used as-is."""
-
     @abstractmethod
     def _pool(self, model_output, attention_mask):
         """Aggregate token-level hidden states into a single embedding per item.
