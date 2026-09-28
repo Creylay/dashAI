@@ -47,7 +47,7 @@ if TYPE_CHECKING:
         BaseChunkingModel,
     )
     from DashAI.back.models.RAG.prompts import Prompt
-    from DashAI.back.models.RAG.retrievers.retriever_model import RetrieverModel
+    from DashAI.back.models.RAG.retrievers.base_retriever import BaseRetriever
 
 
 @dataclass(frozen=True)
@@ -228,7 +228,7 @@ class RAGPipelineSchema(BaseSchema):
     )  # type: ignore
 
     retriever_model: schema_field(
-        component_field(parent="RetrieverModel"),
+        component_field(parent="BaseRetriever"),
         placeholder={"component": "BM25Retriever", "params": {}},
         description=MultilingualString(
             en="Retriever component used in the RAG pipeline.",
@@ -274,7 +274,7 @@ class RAGPipeline(BaseGenerativeModel):
     prompt_model: Prompt
     chunking_model: BaseChunkingModel
     chunks: Dict[int, Dict[int, Chunk]]
-    retriever: RetrieverModel
+    retriever: BaseRetriever
     llm_model: TextToTextGenerationTaskModel
 
     DISPLAY_NAME: str = MultilingualString(
@@ -324,7 +324,7 @@ class RAGPipeline(BaseGenerativeModel):
         chunks: Dict[int, Dict[int, Chunk]],
         prompt_model: Prompt,
         chunking_model: BaseChunkingModel,
-        retriever: RetrieverModel,
+        retriever: BaseRetriever,
         llm_model: TextToTextGenerationTaskModel,
     ) -> None:
         """Initialise the RAG pipeline with fully constructed dependencies.
