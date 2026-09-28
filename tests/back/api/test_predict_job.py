@@ -123,13 +123,21 @@ def create_trained_run(client: TestClient, model_session_id: int):
     return run_id
 
 
-def _create_prediction(client, run_id, dataset_id=None):
+def _create_prediction(client, run_id, dataset_id=None, split=None):
     response = client.post(
         "/api/v1/predict/",
-        json={"run_id": run_id, "dataset_id": dataset_id},
+        json={"run_id": run_id, "dataset_id": dataset_id, "split": split},
     )
     assert response.status_code == 200, response.text
     return response.json()["id"]
+
+
+def _run_split_indexes(client, run_id):
+    """The raw ``Run.split_indexes`` payload, decoded when stored as text."""
+    session_factory = client.app.container["session_factory"]
+    with session_factory() as db:
+        payload = db.get(Run, run_id).split_indexes
+    return json.loads(payload) if isinstance(payload, str) else payload
 
 
 def _make_prediction_dataset(client, dataset_1: Dataset):
@@ -278,6 +286,84 @@ def test_neither_a_dataset_nor_manual_input_is_rejected(client, trained_run_id):
         PredictJob(prediction_id=prediction_id).run()
 
     assert _stored_prediction(client, prediction_id)["status"] == PredictionStatus.ERROR
+
+
+# --------------------------------------------------------------------------- #
+# Predicting on one partition of the training dataset (#858)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_prediction_on_a_partition_covers_exactly_its_rows(
+    client, trained_run_id, dataset_1
+):
+    """Regression: the partition the request names used to be ignored.
+
+    The endpoint stored ``split``, the splits endpoint listed the partitions
+    and the front offered the selector, but the job loaded every row and
+    finished without a word, so asking for "test" returned train, validation
+    and test alike. The saved prediction now holds the rows of that partition
+    and no others, the same rows the run was scored on.
+    """
+    prediction_id = _create_prediction(
+        client, trained_run_id, dataset_1.id, split="test"
+    )
+
+    PredictJob(prediction_id=prediction_id).run()
+
+    stored = _stored_prediction(client, prediction_id)
+    assert stored["status"] == PredictionStatus.FINISHED
+
+    test_indexes = _run_split_indexes(client, trained_run_id)["test_indexes"]
+    assert 0 < len(test_indexes) < IRIS_ROWS, "the partition must be a proper subset"
+
+    saved = load_dataset(str(Path(stored["results_path"]) / "dataset"))
+    assert saved.column_names == INPUT_COLUMNS + [OUTPUT_COLUMN]
+    assert len(saved) == len(test_indexes)
+
+    # Not only the right count: the very rows of the partition, in its order.
+    original = load_dataset(str(Path(dataset_1.file_path) / "dataset"))
+    expected = original.select(test_indexes).select_columns(INPUT_COLUMNS)
+    assert saved.select_columns(INPUT_COLUMNS).to_dict() == expected.to_dict()
+
+
+def test_a_partition_the_run_does_not_have_ends_the_prediction_in_error(
+    client, trained_run_id, dataset_1
+):
+    """A bad partition name fails with its own message, and marks the row.
+
+    Resolved ahead of loading the dataset, so it neither falls into the
+    generic "invalid input data" wrapper nor leaves the prediction STARTED.
+    """
+    prediction_id = _create_prediction(
+        client, trained_run_id, dataset_1.id, split="fold-7"
+    )
+
+    with pytest.raises(
+        JobError,
+        match="Cannot predict on the fold-7 split: fold-7 is not a partition",
+    ):
+        PredictJob(prediction_id=prediction_id).run()
+
+    assert _stored_prediction(client, prediction_id)["status"] == PredictionStatus.ERROR
+
+
+def test_a_partition_name_means_nothing_on_a_dataset_the_run_was_not_trained_on(
+    client, trained_run_id, dataset_1
+):
+    """The row indexes of a run describe its training dataset only.
+
+    On any other dataset the name is ignored rather than applied to rows it
+    was never computed for, and every row is predicted.
+    """
+    other = _make_prediction_dataset(client, dataset_1)
+    prediction_id = _create_prediction(client, trained_run_id, other.id, split="test")
+
+    PredictJob(prediction_id=prediction_id).run()
+
+    stored = _stored_prediction(client, prediction_id)
+    assert stored["status"] == PredictionStatus.FINISHED
+    saved = load_dataset(str(Path(stored["results_path"]) / "dataset"))
+    assert len(saved) == IRIS_ROWS
 
 
 def test_a_missing_prediction_row_is_a_404(client):

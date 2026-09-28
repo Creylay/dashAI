@@ -9,6 +9,7 @@ from sqlalchemy import exc
 
 from DashAI.back.dependencies.database.models import Dataset, ModelSession, Prediction
 from DashAI.back.job.base_job import BaseJob, JobError
+from DashAI.back.splitters.splits_payload import run_split_indexes
 from DashAI.back.units.build_manual_input_unit import BuildManualInputUnit
 from DashAI.back.units.context import ExecutionContext
 from DashAI.back.units.load_dataset_unit import LoadDatasetUnit
@@ -284,6 +285,7 @@ class PredictJob(BaseJob):
         self,
     ) -> List[Any]:
         session_factory = di["session_factory"]
+        component_registry = di["component_registry"]
 
         ctx = ExecutionContext()
 
@@ -408,12 +410,41 @@ class PredictJob(BaseJob):
                 log.exception(e)
                 raise
 
+            # The rows to predict on, when the request names a partition of
+            # the run. A partition only means something on the dataset the
+            # model was trained on; on any other dataset the name is ignored,
+            # as it always was. Resolved ahead of the load so a partition the
+            # run does not have fails with its own message rather than as
+            # invalid input data, and so the row remains in error.
+            row_indexes = None
+            if prediction.split and dataset_id == model_session.dataset_id:
+                try:
+                    row_indexes = run_split_indexes(
+                        model_session.splits,
+                        prediction.run.split_indexes,
+                        component_registry,
+                        prediction.split,
+                    )
+                except ValueError as e:
+                    prediction.set_status_as_error()
+                    db.commit()
+                    log.exception(e)
+                    raise JobError(
+                        f"Cannot predict on the {prediction.split} split: {e}"
+                    ) from e
+
             try:
                 # Load or create prediction dataset. Both branches publish the
                 # same "dataset" key, so the prediction below cannot tell a
                 # dataset read from disk from one typed in by hand.
                 if dataset_id:
                     LoadDatasetUnit(dataset_id=dataset_id)(ctx)
+                    # Narrowed on the raw rows, straight after the load and
+                    # before anything downstream reshapes them, and written
+                    # back under the same key: the saved prediction has to
+                    # cover the rows that were asked for and no others.
+                    if row_indexes is not None:
+                        ctx.put("dataset", ctx.require("dataset").select(row_indexes))
                 else:
                     BuildManualInputUnit(
                         task_name=model_session.task_name,
