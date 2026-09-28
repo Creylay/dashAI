@@ -9,6 +9,9 @@ import {
   buildStepDisplayNames,
   resolveDeclaredOutputSlots,
   rawColumnsNeededFor,
+  itemToRef,
+  stateToOptions,
+  labelForRef,
 } from "./sessionColumnRefs";
 
 describe("sessionColumnRefs", () => {
@@ -393,6 +396,127 @@ describe("sessionColumnRefs", () => {
         { kind: "group", step: 5 },
       ];
       expect(rawColumnsNeededFor(refs, [])).toEqual(["age"]);
+    });
+  });
+
+  describe("named group refs", () => {
+    it("round-trips a named group ColumnRef through a key", () => {
+      const ref = { kind: "group", step: 1, name: "date_month" };
+      const key = refToKey(ref);
+      expect(isGroupKey(key)).toBe(true);
+      expect(stepFromGroupKey(key)).toBe(1);
+      expect(slotFromGroupKey(key)).toBeNull();
+      expect(keyToRef(key)).toEqual(ref);
+    });
+
+    it("keeps a column name containing the separators intact", () => {
+      const ref = { kind: "group", step: 0, name: "a__slot__b" };
+      expect(keyToRef(refToKey(ref))).toEqual(ref);
+    });
+  });
+
+  describe("itemToRef", () => {
+    it("refs an original column by name", () => {
+      const item = { kind: "column", name: "age", origin: null };
+      expect(itemToRef(item)).toEqual({ kind: "raw", name: "age" });
+    });
+
+    it("refs a generated column by its step and name", () => {
+      const item = { kind: "column", name: "date_month", origin: 2 };
+      expect(itemToRef(item)).toEqual({
+        kind: "group",
+        step: 2,
+        name: "date_month",
+      });
+    });
+
+    it("refs a lone block as its step's whole group", () => {
+      const item = { kind: "block", step: 0, slot: null };
+      expect(itemToRef(item)).toEqual({ kind: "group", step: 0 });
+    });
+
+    it("refs one of several blocks by its slot", () => {
+      const item = { kind: "block", step: 0, slot: "Float" };
+      expect(itemToRef(item)).toEqual({
+        kind: "group",
+        step: 0,
+        slot: "Float",
+      });
+    });
+  });
+
+  describe("stateToOptions", () => {
+    const state = [
+      {
+        kind: "column",
+        name: "age",
+        type: "Integer",
+        dtype: "int64",
+        origin: null,
+      },
+      {
+        kind: "column",
+        name: "date_month",
+        type: "Integer",
+        dtype: "int64",
+        origin: 1,
+      },
+      {
+        kind: "block",
+        step: 0,
+        slot: null,
+        label: "output",
+        type: "Float",
+        dtype: "float64",
+        count: 2,
+      },
+      {
+        kind: "block",
+        step: 2,
+        slot: null,
+        label: "ohe_*",
+        type: "Integer",
+        dtype: "int64",
+        count: null,
+      },
+    ];
+    const stepNames = ["PCA", "Date Features", "One Hot Encoder"];
+
+    it("keys every item as the ref it stands for, typed", () => {
+      const { allKeys, columnTypes } = stateToOptions(state, stepNames);
+
+      expect(allKeys.map(keyToRef)).toEqual(state.map(itemToRef));
+      expect(columnTypes.age).toEqual({ type: "Integer", dtype: "int64" });
+      expect(columnTypes[allKeys[2]]).toEqual({
+        type: "Float",
+        dtype: "float64",
+      });
+    });
+
+    it("labels blocks with their step and size, N when unknown", () => {
+      const { allKeys, optionLabels } = stateToOptions(state, stepNames);
+
+      expect(optionLabels[allKeys[0]]).toBeUndefined();
+      expect(optionLabels[allKeys[1]]).toBe("date_month");
+      expect(optionLabels[allKeys[2]]).toBe("PCA: output (2)");
+      expect(optionLabels[allKeys[3]]).toBe("One Hot Encoder: ohe_* (N)");
+    });
+  });
+
+  describe("labelForRef", () => {
+    const stepNames = ["PCA", "Date Features"];
+
+    it("labels a ref without needing the estimated structure", () => {
+      expect(labelForRef({ kind: "raw", name: "age" }, stepNames)).toBe("age");
+      expect(
+        labelForRef({ kind: "group", step: 1, name: "date_month" }, stepNames),
+      ).toBe("date_month");
+      expect(labelForRef({ kind: "group", step: 0 }, stepNames)).toBe(
+        "PCA: output",
+      );
+      expect(
+        labelForRef({ kind: "group", step: 0, slot: "Float" }, stepNames),
+      ).toBe("PCA: output (Float)");
     });
   });
 });

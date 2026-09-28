@@ -3,6 +3,7 @@ import type {
   IColumnRef,
   IConverterStep,
   IModelSession,
+  IStructureResult,
 } from "../types/modelSession";
 
 const endpointURL = "/v1/model-session";
@@ -97,6 +98,35 @@ export const validateColumns = async (
   const response = await api.post<object>(
     "/v1/model-session/validation",
     formData,
+  );
+  return response.data;
+};
+
+// Estimate the dataset state after every step of a preprocessing chain,
+// without fitting anything (see the backend's infer_structure).
+export const getPreprocessingStructure = async ({
+  datasetId,
+  candidates,
+  outputColumns,
+  steps,
+}: {
+  datasetId: number;
+  candidates: string[];
+  outputColumns: string[];
+  steps: IConverterStep[];
+}): Promise<IStructureResult> => {
+  const response = await api.post<IStructureResult>(
+    `${endpointURL}/preprocessing/structure`,
+    {
+      dataset_id: datasetId,
+      candidates,
+      output_columns: outputColumns,
+      steps: steps.map(({ converter, params, scope }) => ({
+        converter,
+        params,
+        scope,
+      })),
+    },
   );
   return response.data;
 };

@@ -20,44 +20,122 @@
 
 const GROUP_KEY_PREFIX = "__group__";
 const SLOT_SEPARATOR = "__slot__";
+const NAME_SEPARATOR = "__name__";
+// The step, then at most one of a slot or a column name. Only the first
+// separator after the step counts, so a slot or column name that itself
+// contains a separator stays intact.
+const GROUP_KEY_PATTERN = new RegExp(
+  `^${GROUP_KEY_PREFIX}(\\d+)(?:${SLOT_SEPARATOR}(.*)|${NAME_SEPARATOR}(.*))?$`,
+  "s",
+);
 
 export const groupKey = (step, slot = null) =>
   slot == null
     ? `${GROUP_KEY_PREFIX}${step}`
     : `${GROUP_KEY_PREFIX}${step}${SLOT_SEPARATOR}${slot}`;
 
+// A generated column whose name is known before fit (e.g. DateFeatures'
+// "date_month"), mirroring the backend's GroupColumnRef.name.
+export const namedGroupKey = (step, name) =>
+  `${GROUP_KEY_PREFIX}${step}${NAME_SEPARATOR}${name}`;
+
 export const isGroupKey = (key) =>
   typeof key === "string" && key.startsWith(GROUP_KEY_PREFIX);
 
-export const stepFromGroupKey = (key) => {
-  const withoutPrefix = key.slice(GROUP_KEY_PREFIX.length);
-  const separatorIndex = withoutPrefix.indexOf(SLOT_SEPARATOR);
-  const stepPart =
-    separatorIndex === -1
-      ? withoutPrefix
-      : withoutPrefix.slice(0, separatorIndex);
-  return Number(stepPart);
+const parseGroupKey = (key) => {
+  const match = GROUP_KEY_PATTERN.exec(key);
+  return {
+    step: Number(match[1]),
+    slot: match[2] ?? null,
+    name: match[3] ?? null,
+  };
 };
 
-export const slotFromGroupKey = (key) => {
-  const withoutPrefix = key.slice(GROUP_KEY_PREFIX.length);
-  const separatorIndex = withoutPrefix.indexOf(SLOT_SEPARATOR);
-  return separatorIndex === -1
-    ? null
-    : withoutPrefix.slice(separatorIndex + SLOT_SEPARATOR.length);
-};
+export const stepFromGroupKey = (key) => parseGroupKey(key).step;
+
+export const slotFromGroupKey = (key) => parseGroupKey(key).slot;
 
 /** ColumnRef -> synthetic key */
-export const refToKey = (ref) =>
-  ref.kind === "raw" ? ref.name : groupKey(ref.step, ref.slot ?? null);
+export const refToKey = (ref) => {
+  if (ref.kind === "raw") return ref.name;
+  if (ref.name != null) return namedGroupKey(ref.step, ref.name);
+  return groupKey(ref.step, ref.slot ?? null);
+};
 
 /** synthetic key -> ColumnRef */
 export const keyToRef = (key) => {
   if (!isGroupKey(key)) return { kind: "raw", name: key };
-  const step = stepFromGroupKey(key);
-  const slot = slotFromGroupKey(key);
+  const { step, slot, name } = parseGroupKey(key);
+  if (name != null) return { kind: "group", step, name };
   return slot == null ? { kind: "group", step } : { kind: "group", step, slot };
 };
+
+/**
+ * The ColumnRef that points at an item of the estimated dataset structure
+ * (see the backend's infer_structure): an original column by name, a
+ * generated column by its step and name, a block by its step and slot (a
+ * lone block has no slot: it is its step's whole group).
+ */
+export const itemToRef = (item) => {
+  if (item.kind === "column") {
+    return item.origin == null
+      ? { kind: "raw", name: item.name }
+      : { kind: "group", step: item.origin, name: item.name };
+  }
+  return item.slot == null
+    ? { kind: "group", step: item.step }
+    : { kind: "group", step: item.step, slot: item.slot };
+};
+
+const blockLabel = (block, stepName) => {
+  const base =
+    block.label && block.label !== "output"
+      ? `${stepName}: ${block.label}`
+      : `${stepName}: output`;
+  // "N" when the column count is only known after fit.
+  return `${base} (${block.count ?? "N"})`;
+};
+
+/**
+ * Selector options for the items of an estimated dataset state: one key per
+ * item (the synthetic key of the ColumnRef pointing at it), its type, and a
+ * label for every item that is not an original column. Plugs into the same
+ * `{allKeys, columnTypes, optionLabels}` shape ColumnSelector and
+ * DivideDatasetColumns already take.
+ *
+ * @param {Array<object>} state items from a StructureResult state
+ * @param {string[]} stepDisplayNames one name per step (see
+ *   buildStepDisplayNames)
+ */
+export function stateToOptions(state, stepDisplayNames = []) {
+  const allKeys = [];
+  const columnTypes = {};
+  const optionLabels = {};
+  (state || []).forEach((item) => {
+    const key = refToKey(itemToRef(item));
+    allKeys.push(key);
+    columnTypes[key] = { type: item.type ?? null, dtype: item.dtype ?? null };
+    if (item.kind === "block") {
+      optionLabels[key] = blockLabel(item, stepDisplayNames[item.step] ?? "");
+    } else if (item.origin != null) {
+      optionLabels[key] = item.name;
+    }
+  });
+  return { allKeys, columnTypes, optionLabels };
+}
+
+/**
+ * A label for a ColumnRef without the estimated structure, for sessions
+ * that are already created (e.g. the session info panel).
+ */
+export function labelForRef(ref, stepDisplayNames = []) {
+  if (ref.kind === "raw") return ref.name;
+  if (ref.name != null) return ref.name;
+  const stepName = stepDisplayNames[ref.step] ?? `${ref.step}`;
+  return ref.slot == null
+    ? `${stepName}: output`
+    : `${stepName}: output (${ref.slot})`;
+}
 
 // A step's declared output, normalized to a list of slots — even a
 // homogeneous step (the common case) is one "slot" with slot: null, so
