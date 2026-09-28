@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { useStrategyKind } from "../../hooks/useStrategyKind";
 import { STRATEGY_KINDS } from "../../utils/splitsPayload";
-import { Box, Typography, Divider, Button, ToggleButton } from "@mui/material";
+import {
+  Box,
+  Typography,
+  Divider,
+  Button,
+  ToggleButton,
+  CircularProgress,
+} from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import { useParams, useNavigate } from "react-router-dom";
 import { PlayArrow } from "@mui/icons-material";
@@ -20,6 +27,10 @@ import ModelsBreadcrumbs from "./ModelsBreadcrumbs";
 import PillToggleButtonGroup from "../shared/PillToggleButtonGroup";
 import { useTranslation } from "react-i18next";
 import { useSnackbar } from "notistack";
+import {
+  createAndRunReport,
+  hasConfigurableParameters,
+} from "../reports/createAndRunReport";
 
 import { useModels } from "./ModelsContext";
 import { useTourContext } from "../tour/TourProvider";
@@ -53,6 +64,8 @@ export default function SessionVisualization() {
     clearLastAddedRunId,
     selectModel,
     openExplainerCreator,
+    openReportCreator,
+    triggerReportRefresh,
     explainerRefreshTrigger,
     triggerExplainerRefresh,
     openStatisticalTest,
@@ -77,7 +90,8 @@ export default function SessionVisualization() {
       const types = e.dataTransfer.types;
       if (
         types.includes("application/x-dashai-model") ||
-        types.includes("application/x-dashai-explainer")
+        types.includes("application/x-dashai-explainer") ||
+        types.includes("application/x-dashai-report")
       ) {
         setIsDragging(true);
       }
@@ -293,6 +307,55 @@ export default function SessionVisualization() {
     );
   }
 
+  // Sessions with preprocessing steps run a PreprocessingJob (fit/transform
+  // on train, persist to disk) right after creation — no Run can train, and
+  // nothing about the session is safe to show, until it finishes.
+  const hasPreprocessing = (session.preprocessing?.steps || []).length > 0;
+  if (hasPreprocessing && session.preprocessing_status === "failed") {
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          justifyContent: "center",
+          alignItems: "center",
+          p: 8,
+          gap: 2,
+        }}
+      >
+        <Typography variant="h6" color="error">
+          {t("models:label.preprocessingFailed")}
+        </Typography>
+        {session.preprocessing_error && (
+          <Typography variant="body2" color="text.secondary">
+            {session.preprocessing_error}
+          </Typography>
+        )}
+      </Box>
+    );
+  }
+  if (hasPreprocessing && session.preprocessing_status === "pending") {
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          justifyContent: "center",
+          alignItems: "center",
+          p: 8,
+          gap: 2,
+        }}
+      >
+        <CircularProgress />
+        <Typography variant="body1" color="text.secondary">
+          {t("models:label.preprocessingInProgress")}
+        </Typography>
+      </Box>
+    );
+  }
+
   return (
     <>
       <Box
@@ -302,6 +365,7 @@ export default function SessionVisualization() {
           if (
             !e.dataTransfer.types.includes("application/x-dashai-model") &&
             !e.dataTransfer.types.includes("application/x-dashai-explainer") &&
+            !e.dataTransfer.types.includes("application/x-dashai-report") &&
             !e.dataTransfer.types.includes(
               "application/x-dashai-statistical-test",
             )
@@ -315,6 +379,7 @@ export default function SessionVisualization() {
           if (
             !e.dataTransfer.types.includes("application/x-dashai-model") &&
             !e.dataTransfer.types.includes("application/x-dashai-explainer") &&
+            !e.dataTransfer.types.includes("application/x-dashai-report") &&
             !e.dataTransfer.types.includes(
               "application/x-dashai-statistical-test",
             )
@@ -336,7 +401,9 @@ export default function SessionVisualization() {
           const isStatisticalTest = types.includes(
             "application/x-dashai-statistical-test",
           );
-          if (!isModel && !isExplainer && !isStatisticalTest) return;
+          const isReport = types.includes("application/x-dashai-report");
+          if (!isModel && !isExplainer && !isStatisticalTest && !isReport)
+            return;
           e.preventDefault();
           setIsDragOver(false);
           try {
@@ -351,6 +418,30 @@ export default function SessionVisualization() {
               );
               if (test?.name) {
                 openStatisticalTest(test);
+              }
+            } else if (isReport) {
+              const report = JSON.parse(
+                e.dataTransfer.getData("application/x-dashai-report"),
+              );
+              if (report?.name) {
+                // Same rule as clicking the row in the sidebar: nothing to
+                // configure means nothing to ask.
+                if (hasConfigurableParameters(report) || !activeRun) {
+                  openReportCreator(report);
+                } else {
+                  createAndRunReport({
+                    runId: activeRun.id,
+                    reportName: report.name,
+                    t,
+                    enqueueSnackbar,
+                    onCreated: triggerReportRefresh,
+                  }).catch((error) => {
+                    console.error("Error creating report:", error);
+                    enqueueSnackbar(t("reports:error.create"), {
+                      variant: "error",
+                    });
+                  });
+                }
               }
             } else {
               const model = JSON.parse(
@@ -540,6 +631,7 @@ export default function SessionVisualization() {
                           )
                         }
                         isHighlighted={highlightedRunId === run.id}
+                        isLastRun={index === sortedRuns.length - 1}
                       />
                     </Box>
                   ))}

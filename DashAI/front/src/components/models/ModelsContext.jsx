@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 import { useSharedDatasets } from "../../contexts/DatasetsContext";
 import { useSessions } from "../../hooks/models/useSessions";
 import { useModelComponents } from "../../hooks/models/useModelComponents";
+import { useJobTracker } from "../../hooks/useJobPolling";
 const ModelsContext = createContext(null);
 
 export const useModels = () => useContext(ModelsContext);
@@ -98,6 +99,8 @@ export function ModelsProvider({ children }) {
   const [runDetailTab, setRunDetailTab] = useState(null);
   const [explainerRefreshTrigger, setExplainerRefreshTrigger] = useState(0);
   const [explainerToCreate, setExplainerToCreate] = useState(null);
+  const [reportRefreshTrigger, setReportRefreshTrigger] = useState(0);
+  const [reportToCreate, setReportToCreate] = useState(null);
   const [openSections, setOpenSections] = useState({});
   const [datasetRowCount, setDatasetRowCount] = useState(null);
   const [selectedStatisticalTest, setSelectedStatisticalTest] = useState(null);
@@ -106,6 +109,20 @@ export function ModelsProvider({ children }) {
 
   const triggerExplainerRefresh = useCallback(() => {
     setExplainerRefreshTrigger((prev) => prev + 1);
+  }, []);
+
+  const triggerReportRefresh = useCallback(() => {
+    setReportRefreshTrigger((prev) => prev + 1);
+  }, []);
+
+  // Open the report creation dialog for a given component, mirroring how
+  // openExplainerCreator drives the explainer stepper from the sidebar.
+  const openReportCreator = useCallback((report) => {
+    setReportToCreate(report);
+  }, []);
+
+  const closeReportCreator = useCallback(() => {
+    setReportToCreate(null);
   }, []);
 
   // Open the explainer creation dialog for a given {scope, name}. Shared so both
@@ -148,6 +165,25 @@ export function ModelsProvider({ children }) {
   useEffect(() => {
     fetchTasks();
   }, [i18n.language]);
+
+  // Track the selected session's PreprocessingJob through the same shared
+  // job-polling mechanism the Job Queue widget itself uses (jobPoller.js),
+  // instead of polling preprocessing_status on an independent timer — this
+  // is what every other job-backed "processing" indicator in the app does
+  // (RunnerDialog, ComponentDownloadControl, prediction/explainer panels,
+  // ...). Sharing the exact same poll loop for the exact same job id is what
+  // keeps this indicator and the widget from ever showing contradictory
+  // states. Refreshing the whole session list on success/error is enough,
+  // since ModelsContent re-derives `selectedSession` from it. No-op for
+  // sessions with no preprocessing steps (preprocessing_job_id stays null).
+  const hasPendingPreprocessing =
+    (selectedSession?.preprocessing?.steps || []).length > 0 &&
+    selectedSession?.preprocessing_status === "pending";
+  useJobTracker(
+    hasPendingPreprocessing ? selectedSession?.preprocessing_job_id : null,
+    fetchSessions,
+    fetchSessions,
+  );
 
   // Memoized — this context wraps the entire models page tree, so a fresh
   // object literal every render would force every consumer (RunCard,
@@ -235,6 +271,11 @@ export function ModelsProvider({ children }) {
       explainerToCreate,
       openExplainerCreator,
       closeExplainerCreator,
+      reportRefreshTrigger,
+      triggerReportRefresh,
+      reportToCreate,
+      openReportCreator,
+      closeReportCreator,
       openSections,
       setOpenSections,
       openFolderIds,
@@ -308,6 +349,11 @@ export function ModelsProvider({ children }) {
       explainerToCreate,
       openExplainerCreator,
       closeExplainerCreator,
+      reportRefreshTrigger,
+      triggerReportRefresh,
+      reportToCreate,
+      openReportCreator,
+      closeReportCreator,
       openSections,
       openFolderIds,
       selectedStatisticalTest,
