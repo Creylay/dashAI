@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from DashAI.back.models.RAG.chunking_models.base_chunking_model import (
         BaseChunkingModel,
     )
-    from DashAI.back.models.RAG.prompts import Prompt
+    from DashAI.back.models.RAG.prompts import BasePrompt
     from DashAI.back.models.RAG.retrievers.base_retriever import BaseRetriever
 
 
@@ -201,7 +201,7 @@ class RAGPipelineSchema(BaseSchema):
     )  # type: ignore
 
     prompt: schema_field(
-        component_field(parent="Prompt"),
+        component_field(parent="BasePrompt"),
         placeholder={"component": "DefaultRAGGenerationPrompt", "params": {}},
         description=MultilingualString(
             en="Prompt template used in the RAG pipeline.",
@@ -271,7 +271,7 @@ class RAGPipeline(BaseGenerativeModel):
     chunking_model_id: int
     documents_ids: List[int]
     documents: Dict[int, BaseDocument]
-    prompt_model: Prompt
+    prompt_model: BasePrompt
     chunking_model: BaseChunkingModel
     chunks: Dict[int, Dict[int, Chunk]]
     retriever: BaseRetriever
@@ -322,7 +322,7 @@ class RAGPipeline(BaseGenerativeModel):
         chunking_model_id: int,
         documents: Dict[int, BaseDocument],
         chunks: Dict[int, Dict[int, Chunk]],
-        prompt_model: Prompt,
+        prompt_model: BasePrompt,
         chunking_model: BaseChunkingModel,
         retriever: BaseRetriever,
         llm_model: TextToTextGenerationTaskModel,
