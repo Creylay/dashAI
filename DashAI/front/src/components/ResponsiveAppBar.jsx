@@ -31,7 +31,6 @@ function ResponsiveAppBar() {
   const pages = [
     { name: t("common:datasets"), to: "/app/data" },
     { name: t("common:models"), to: "/app/models" },
-    { name: t("common:pipelines"), to: "/app/pipelines" },
     { name: t("common:generative"), to: "/app/generative" },
     { name: t("common:plugins"), to: "/app/plugins/browse" },
   ];
