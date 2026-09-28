@@ -27,6 +27,7 @@ class ColumnRemover(BasicPreprocessingConverter, BaseConverter):
 
     SCHEMA = ColumnRemoverSchema
     LEARNS_FROM_DATA = False
+    COLUMN_OPERATION = "select"
     DESCRIPTION = MultilingualString(
         en="Removes the columns selected in scope from the dataset.",
         es="Elimina las columnas seleccionadas en el alcance del conjunto de datos.",

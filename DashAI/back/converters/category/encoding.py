@@ -28,6 +28,7 @@ class EncodingConverter(BaseConverter):
     )
     ICON: Final[str] = Icon.Dns.value
     COLOR: Final[str] = "rgb(138, 43, 226)"
+    COLUMN_OPERATION = "add"
     PREFIX: str = "encoded_"
 
     def transform(

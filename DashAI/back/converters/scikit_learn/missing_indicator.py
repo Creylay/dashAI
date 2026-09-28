@@ -52,6 +52,7 @@ class MissingIndicator(
     """
 
     SCHEMA = MissingIndicatorSchema
+    COLUMN_OPERATION = "add"
     DESCRIPTION = MultilingualString(
         en="Binary indicators for missing values.",
         es="Indicadores binarios para valores faltantes.",
