@@ -8,8 +8,10 @@ from DashAI.back.units.context import ExecutionContext
 from DashAI.back.units.splitter_scope import (
     SplitterScopeMixin,
     fold_splitter_field,
+    input_column_refs_field,
     input_columns_field,
     output_columns_field,
+    preprocessing_artifacts_path_field,
     task_name_field,
 )
 
@@ -21,6 +23,8 @@ class PrepareAndFoldSchema(BaseSchema):
     input_columns: input_columns_field()  # type: ignore
     output_columns: output_columns_field()  # type: ignore
     splitter: fold_splitter_field()  # type: ignore
+    input_column_refs: input_column_refs_field()  # type: ignore
+    preprocessing_artifacts_path: preprocessing_artifacts_path_field()  # type: ignore
 
 
 class PrepareAndFoldUnit(BaseUnit, SplitterScopeMixin):
@@ -44,6 +48,13 @@ class PrepareAndFoldUnit(BaseUnit, SplitterScopeMixin):
     of every partition this run produced -- even though a fold payload is
     shaped differently from a holdout one. Which shape it is, is answered by
     asking the splitter that produced it, not by inspecting the payload.
+
+    A session that ran a preprocessing sequence sets two optional fields
+    together, ``input_column_refs`` and ``preprocessing_artifacts_path``, as
+    the holdout sibling does and for the same reason. Here each entry has a
+    fit of its own: fold ``i`` is transformed with ``fold_{i}.pkl`` and the
+    trailing entry with ``final.pkl``, which is what keeps a fold from seeing
+    statistics fitted on the rows it is scored on.
     """
 
     SCHEMA = PrepareAndFoldSchema
@@ -62,8 +73,18 @@ class PrepareAndFoldUnit(BaseUnit, SplitterScopeMixin):
         dataset = ctx.require("dataset")
         dataset_id = ctx.require("dataset_id")
 
-        task, n_labels, x, y = self._prepare(dataset, dataset_id)
+        # Read here and not in the shared body, so the audit that parses this
+        # class sees the two fields being read against their declaration.
+        preprocessing = self._persisted_preprocessing(
+            self.config.get("preprocessing_artifacts_path"),
+            self.config.get("input_column_refs"),
+        )
+
+        task, n_labels, x, y = self._prepare(dataset, dataset_id, preprocessing)
         x_folds, y_folds, split_indexes = self._split(x, y)
+        if preprocessing is not None:
+            names = [f"fold_{i}" for i in range(len(x_folds) - 1)] + ["final"]
+            x_folds = self._apply_preprocessing(x_folds, names, preprocessing)
 
         ctx.put_ref("task_name", self.config["task_name"])
         ctx.put_ref("split_indexes", split_indexes)
