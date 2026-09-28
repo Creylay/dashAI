@@ -67,7 +67,10 @@ function PipelineHistorySidebar({ currentPipelineId }) {
 
   const selectedPipeline = useMemo(() => {
     const parsedId = Number(currentPipelineId);
-    return Number.isFinite(parsedId) ? [parsedId] : [];
+    return {
+      type: "include",
+      ids: new Set(Number.isFinite(parsedId) ? [parsedId] : []),
+    };
   }, [currentPipelineId]);
 
   const handleOpenRowMenu = (event, pipeline) => {
