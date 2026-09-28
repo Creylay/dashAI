@@ -84,9 +84,7 @@ class FitModelUnit(BaseUnit, ModelFitScopeMixin):
 
         plot_paths = []
         try:
-            if not self._will_search(optimizable_parameters):
-                self._fit_kept_model(model, x, y)
-            else:
+            if self._will_search(optimizable_parameters):
                 # Every read of the context happens here rather than in the
                 # shared helper: the contract audit parses this file, so a
                 # require moved out of it makes a declared key look unread.
@@ -105,6 +103,16 @@ class FitModelUnit(BaseUnit, ModelFitScopeMixin):
                     self._score_one_trial,
                 )
                 ctx.put_ref("best_parameters", best_parameters)
+
+            # Fitted after the search and not only instead of it. A search
+            # hands back the model with the best values written onto it as
+            # attributes, but its weights are whatever the last trial left
+            # behind, and the last trial is rarely the best one and may have
+            # been pruned halfway. The kept model, the one the LAST metrics
+            # describe and the one that gets serialized, is therefore fitted
+            # once more at the best point, the same way the sibling refits on
+            # the pooled rows once its folds are done.
+            self._fit_kept_model(model, x, y)
         except Exception as e:
             log.exception(e)
             raise JobError(

@@ -375,7 +375,8 @@ def test_the_search_is_handed_the_units_own_objective(tmp_path):
         unit(ctx)
 
         assert _RecordingOptimizer.last_call["strategy"] == unit._score_one_trial
-        assert model.fits == [{"train": "x-train", "validation": "x-val"}]
+        # One fit for the trial the double ran, and one more for the kept model.
+        assert model.fits == [{"train": "x-train", "validation": "x-val"}] * 2
     finally:
         del di["component_registry"]
         del di["config"]
@@ -402,3 +403,125 @@ def test_a_run_with_no_optimizer_fits_once_even_if_a_parameter_is_optimizable():
 
     assert model.fits == [{"train": "x-train", "validation": "x-val"}]
     assert not ctx.has("best_parameters")
+
+
+# --------------------------------------------------------------------------- #
+# What the search leaves behind
+# --------------------------------------------------------------------------- #
+
+
+class _AlphaModel:
+    """Records the alpha each fit was trained with, and predicts it back."""
+
+    def __init__(self):
+        self.alpha = None
+        self.trained_with = []
+        self.x_data = None
+        self.y_data = None
+
+    def train(self, x_train, y_train, x_validation=None, y_validation=None):
+        self.trained_with.append(self.alpha)
+
+    def predict(self, x_data):
+        return self.alpha
+
+    def prepare_output(self, y_data, is_fit=False):
+        return y_data
+
+    def calculate_metrics(self, split, level, **kwargs):
+        pass
+
+
+class _ClosestToHalf:
+    """Scores a prediction by how near it is to 0.5, so there is a best alpha."""
+
+    @staticmethod
+    def score(expected, predictions):
+        return -abs(predictions - 0.5)
+
+
+class _AlphaFactory:
+    @staticmethod
+    def update_parameters(old, best):
+        return {**old, **best}
+
+
+class _SeveralTrialsOptimizer:
+    """Runs a fixed schedule of trials the way Optuna does, and nothing more.
+
+    Each trial sets the value on the model and calls the objective. Once the
+    schedule is over, the best value is written back onto the model as an
+    attribute, which is exactly what ``OptunaOptimizer.optimize`` does at its
+    end, and nothing is fitted again: the weights are the last trial's.
+    """
+
+    #: The alphas tried, in order. The best one is deliberately not the last.
+    SCHEDULE = [0.1, 0.467, 0.9, 0.288]
+
+    def __init__(self, **params):
+        self.model = None
+        self.best = None
+
+    def optimize(self, model, x, y, parameters, metric, objective):
+        self.model = model
+        # The whole registry entry arrives; the real optimizer unwraps it too.
+        metric_class = metric["class"]
+        scores = {}
+        for alpha in self.SCHEDULE:
+            model.alpha = alpha
+            scores[alpha] = objective(model, x, y, metric_class)
+        self.best = max(scores, key=scores.get)
+        model.alpha = self.best
+
+    def get_model(self):
+        return self.model
+
+    def get_best_params(self):
+        return {"alpha": self.best}
+
+    def get_trials_values(self):
+        return []
+
+    def create_plots(self, trials, run_id, n_params, goal_metric, artifact_prefix):
+        return [], []
+
+
+def test_after_a_search_the_kept_model_is_trained_with_the_best_parameters(
+    tmp_path,
+):
+    """Regression: the search used to be the last fit, so the weights were the
+    last trial's.
+
+    An optimizer only copies the best values onto the model as attributes; the
+    trained weights stay whatever the last trial left, and the last trial is
+    rarely the best one. ``run.parameters`` then showed the best values while
+    the LAST metrics and the serialized model came from a different point, or
+    from a pruned, half-trained fit. The merge-base's holdout strategy refitted
+    after the search, and so does this unit.
+    """
+    registry = {
+        "SeveralTrials": {"class": _SeveralTrialsOptimizer},
+        "Accuracy": {"class": _ClosestToHalf, "metadata": {"maximize": True}},
+    }
+    di["component_registry"] = registry
+    di["config"] = {"RUNS_PATH": str(tmp_path)}
+    try:
+        model = _AlphaModel()
+        ctx = _fit_context(model, _HOLDOUT, _HOLDOUT)
+        ctx.put("optimizable_parameters", [("obj", "alpha", (0, 1), "number")])
+        ctx.put("factory", _AlphaFactory)
+
+        _unit(optimizer_name="SeveralTrials")(ctx)
+
+        best = ctx.require("best_parameters")["alpha"]
+        assert best == 0.467
+        # Every trial fitted once, in schedule order, and the last of those was
+        # not the best: that is the whole case. Then one more fit, at the best.
+        assert model.trained_with[: len(_SeveralTrialsOptimizer.SCHEDULE)] == (
+            _SeveralTrialsOptimizer.SCHEDULE
+        )
+        assert model.trained_with[-1] == best
+        assert ctx.require("model") is model
+    finally:
+        del di["component_registry"]
+        del di["config"]
