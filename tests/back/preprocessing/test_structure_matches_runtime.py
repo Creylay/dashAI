@@ -130,6 +130,28 @@ EXACT = {
     "MinMaxScaler",
     "MaxAbsScaler",
     "Normalizer",
+    "CharacterReplacer[char_to_replace=-,replacement_char=]",
+    "ColumnArithmetic[operation=add]",
+    "ColumnArithmetic[operation=multiply]",
+    "ColumnArithmetic[operation=divide]",
+    "ColumnConcat",
+    "NumericExpansion[operation=square]",
+    "NumericExpansion[operation=log1p]",
+    "DateFeaturesConverter",
+    "TypeCast[new_type=Float]",
+    "ColumnRemover",
+}
+
+# Cases whose output is only concrete columns: names must be known.
+CONCRETE_ONLY = {
+    "ColumnArithmetic[operation=add]",
+    "ColumnArithmetic[operation=multiply]",
+    "ColumnArithmetic[operation=divide]",
+    "ColumnConcat",
+    "NumericExpansion[operation=square]",
+    "NumericExpansion[operation=log1p]",
+    "DateFeaturesConverter",
+    "ColumnRemover",
 }
 
 
@@ -204,6 +226,8 @@ def test_estimated_structure_matches_runtime(case):
             if isinstance(item, BlockItem) and item.count is None
         ]
         assert unknown == [], "the estimate should know the output size"
+    if _case_id(case) in CONCRETE_ONLY:
+        assert not any(isinstance(i, BlockItem) for i in delta.added), "no blocks"
 
     converter = _build(cls, params)
     x = dataset.select_columns(scope)
