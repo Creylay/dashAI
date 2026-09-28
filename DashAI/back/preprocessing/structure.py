@@ -28,8 +28,8 @@ from DashAI.back.preprocessing.structure_types import (
 from DashAI.back.splitters.splits_payload import schema_placeholder_defaults
 
 
-class _StepError(Exception):
-    """A step the estimate rejects, carrying the message for the frontend."""
+class StructureError(Exception):
+    """A chain or ref the estimate rejects, with the message for the frontend."""
 
     def __init__(self, code: str, **params: Any):
         super().__init__(code)
@@ -97,7 +97,7 @@ def infer_structure(
             state, added, warnings = _apply_step(
                 index, step, state, taken, target_set, component_registry
             )
-        except _StepError as e:
+        except StructureError as e:
             results.append(StepStructure(status="error", state=state, error=e.message))
             blocked = True
             continue
@@ -121,25 +121,25 @@ def _apply_step(
     target: Set[str],
     component_registry: Any,
 ) -> Tuple[List[StateItem], List[StateItem], List[StructureMessage]]:
-    """Estimate one step. Updates `taken` in place; raises _StepError."""
+    """Estimate one step. Updates `taken` in place; raises StructureError."""
     try:
         converter_class = component_registry[step.converter]["class"]
     except KeyError as e:
-        raise _StepError("unknown_converter", converter=step.converter) from e
+        raise StructureError("unknown_converter", converter=step.converter) from e
     converter = _instantiate(converter_class, step.params)
 
-    scope = _resolve_scope(step, state, target)
+    scope = resolve_state_refs(step.scope, state, target)
     _check_scope(converter_class, scope)
 
     warnings: List[StructureMessage] = []
     try:
         delta = converter.infer_output_columns(scope)
     except RowsNotSupportedError as e:
-        raise _StepError("rows_not_supported", converter=step.converter) from e
+        raise StructureError("rows_not_supported", converter=step.converter) from e
     except ValueError as e:
         # A converter validating its own configuration against the scope
         # (e.g. ColumnArithmetic without a constant for a single column).
-        raise _StepError("converter_rejected", detail=str(e)) from e
+        raise StructureError("converter_rejected", detail=str(e)) from e
     except Exception:
         # A converter whose estimate is broken (e.g. an older plugin) falls
         # back to the conservative default: its scope is consumed and its
@@ -172,19 +172,40 @@ def _instantiate(converter_class: Any, params: Dict[str, Any]) -> Any:
             )
         return converter_class(**params)
     except Exception as e:
-        raise _StepError("invalid_params", detail=str(e)) from e
+        raise StructureError("invalid_params", detail=str(e)) from e
 
 
-def _resolve_scope(
-    step: ConverterStep, state: List[StateItem], target: Set[str]
+def resolve_state_refs(
+    refs: List[Any], state: List[StateItem], target: Set[str]
 ) -> List[StateItem]:
-    """Map a step's ColumnRefs to the state items they point at."""
+    """Map ColumnRefs to the dataset state items they point at.
+
+    Parameters
+    ----------
+    refs : list of RawColumnRef | GroupColumnRef
+        The refs to resolve, e.g. a step's scope or the model inputs.
+    state : list of ColumnItem | BlockItem
+        The estimated dataset state to resolve them against.
+    target : set of str
+        The output columns, which no ref may point at.
+
+    Returns
+    -------
+    list of ColumnItem | BlockItem
+        The items, in ref order, without duplicates.
+
+    Raises
+    ------
+    StructureError
+        With code "target_in_scope" for a ref to the target, or
+        "missing_ref" for a ref to something that does not exist (anymore).
+    """
     scope: List[StateItem] = []
     seen: Set[Tuple] = set()
-    for ref in step.scope:
+    for ref in refs:
         if ref.kind == "raw":
             if ref.name in target:
-                raise _StepError("target_in_scope", column=ref.name)
+                raise StructureError("target_in_scope", column=ref.name)
             matches = [
                 item
                 for item in state
@@ -221,7 +242,7 @@ def _resolve_scope(
             ]
             label = str(ref.step)
         if not matches:
-            raise _StepError("missing_ref", ref=label)
+            raise StructureError("missing_ref", ref=label)
         for item in matches:
             if _identity(item) not in seen:
                 seen.add(_identity(item))
@@ -248,7 +269,7 @@ def _check_scope(converter_class: Any, scope: List[StateItem]) -> None:
             or (allowed_dtypes and item.dtype not in allowed_dtypes)
             or (item.dtype in non_allowed_dtypes)
         ):
-            raise _StepError(
+            raise StructureError(
                 "type_not_allowed",
                 column=item.name if isinstance(item, ColumnItem) else item.label,
                 type=item.type,
@@ -267,7 +288,7 @@ def _check_scope(converter_class: Any, scope: List[StateItem]) -> None:
     too_few = minimum is not None and (exactly or at_least) < minimum
     too_many = maximum is not None and exactly is not None and exactly > maximum
     if too_few or too_many:
-        raise _StepError(
+        raise StructureError(
             "cardinality",
             min=minimum,
             max=maximum,
@@ -297,7 +318,7 @@ def _check_bounds(
             )
         ]
     if n_components > width:
-        raise _StepError(
+        raise StructureError(
             "n_components_exceeds", n_components=n_components, columns=width
         )
     return []

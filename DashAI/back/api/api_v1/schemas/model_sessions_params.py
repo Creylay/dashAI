@@ -26,7 +26,20 @@ class ColumnsValidationParams(BaseModel):
     inputs_columns: List[str]
     outputs_columns: List[str]
     input_refs: Optional[List[ColumnRef]] = None
+    # With preprocessing, the type of every input ref is taken from the
+    # chain's estimated structure (see infer_structure).
+    preprocessing: Optional[List[ConverterStep]] = None
+    # Legacy: group ref types computed by the frontend, used only when no
+    # preprocessing is sent.
     converter_output_types: Optional[Dict[str, str]] = None
+
+
+class PreprocessingStructureParams(BaseModel):
+    dataset_id: int
+    # Original columns the user may feed into the chain.
+    candidates: List[str]
+    output_columns: List[str]
+    steps: List[ConverterStep] = Field(default_factory=list)
 
 
 class ModelSessionBulkDeleteParams(BaseModel):
