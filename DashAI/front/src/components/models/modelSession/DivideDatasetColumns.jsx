@@ -26,6 +26,7 @@ function DivideDatasetColumns({
   outputError = false,
   outputHelperText = "",
   disabled = false,
+  inputLabel,
 }) {
   const { t } = useTranslation(["experiments", "common", "models"]);
   const theme = useTheme();
@@ -145,7 +146,7 @@ function DivideDatasetColumns({
           <TextField
             {...params}
             required
-            label={t("models:label.inputColumns")}
+            label={inputLabel || t("models:label.inputColumns")}
             error={inputError}
             helperText={inputHelperText}
             placeholder={
@@ -209,6 +210,8 @@ DivideDatasetColumns.propTypes = {
   outputError: PropTypes.bool,
   outputHelperText: PropTypes.string,
   disabled: PropTypes.bool,
+  // Overrides the input selector's label (defaults to "Input columns").
+  inputLabel: PropTypes.string,
 };
 
 export default DivideDatasetColumns;

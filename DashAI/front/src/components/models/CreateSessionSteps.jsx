@@ -6,6 +6,7 @@ import { useFormik } from "formik";
 import { useTourContext } from "../tour/TourProvider";
 import SetNameAndDatasetStep from "./SetNameAndDatasetStep";
 import PrepareDatasetStep from "./modelSession/PrepareDatasetStep";
+import BaseColumnsStep from "./modelSession/BaseColumnsStep";
 import PreprocessingStep from "./modelSession/PreprocessingStep";
 import SelectColumnsStep from "./modelSession/SelectColumnsStep";
 import DatasetAutocomplete from "../notebooks/notebookCreation/DatasetAutocomplete";
@@ -26,6 +27,7 @@ import StepperNavigationFooter from "../shared/StepperNavigationFooter";
 import { hasPartition } from "../../utils/splitsPayload";
 
 const STEP_PREPARE_DATASET = "prepareDataset";
+const STEP_BASE_COLUMNS = "baseColumns";
 const STEP_PREPROCESSING = "preprocessing";
 const STEP_SELECT_COLUMNS = "selectColumns";
 
@@ -66,6 +68,9 @@ function CreateSessionSteps({
     splits: {},
     runs: [],
     applyPreprocessing: false,
+    // Original columns the preprocessing chain may work on (see
+    // BaseColumnsStep); only used when applyPreprocessing is on.
+    candidate_columns: [],
     preprocessing: [],
     input_column_refs: [],
   });
@@ -111,7 +116,12 @@ function CreateSessionSteps({
   const steps = useMemo(
     () => [
       STEP_PREPARE_DATASET,
-      ...(newExp.applyPreprocessing ? [STEP_PREPROCESSING] : []),
+      // With preprocessing, the output and candidate columns come first, so
+      // the chain is built knowing what it is for and never touches the
+      // output.
+      ...(newExp.applyPreprocessing
+        ? [STEP_BASE_COLUMNS, STEP_PREPROCESSING]
+        : []),
       STEP_SELECT_COLUMNS,
     ],
     [newExp.applyPreprocessing],
@@ -128,6 +138,7 @@ function CreateSessionSteps({
       dataset: newDataset,
       input_columns: [],
       output_columns: [],
+      candidate_columns: [],
       input_column_refs: [],
       splits: {},
     }));
@@ -324,12 +335,14 @@ function CreateSessionSteps({
 
   const stepTitle = {
     [STEP_PREPARE_DATASET]: t("models:label.prepareDataset"),
+    [STEP_BASE_COLUMNS]: t("models:label.baseColumnsTitle"),
     [STEP_PREPROCESSING]: t("models:label.preprocessingOptional"),
     [STEP_SELECT_COLUMNS]: t("models:label.selectColumnsTitle"),
   }[currentStep];
 
   const stepSubtitle = {
     [STEP_PREPARE_DATASET]: t("models:label.selectDatasetAndPrepare"),
+    [STEP_BASE_COLUMNS]: t("models:label.baseColumnsDescription"),
     [STEP_PREPROCESSING]: t("models:label.preprocessingOptionalDescription"),
     [STEP_SELECT_COLUMNS]: t("models:label.selectColumnsDescription"),
   }[currentStep];
@@ -382,6 +395,24 @@ function CreateSessionSteps({
                 dataset={selectedDataset}
                 datasetInfo={datasetInfo}
                 infoLoading={infoLoading}
+              />
+            )}
+          </>
+        )}
+
+        {currentStep === STEP_BASE_COLUMNS && selectedDataset && (
+          <>
+            {infoLoading ? (
+              <Box sx={{ display: "flex", justifyContent: "center" }}>
+                <CircularProgress />
+              </Box>
+            ) : (
+              <BaseColumnsStep
+                newExp={newExp}
+                setNewExp={setNewExp}
+                setNextEnabled={setNextEnabled}
+                datasetInfo={datasetInfo}
+                datasetTypes={datasetTypes}
               />
             )}
           </>
