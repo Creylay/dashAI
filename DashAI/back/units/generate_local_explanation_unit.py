@@ -16,7 +16,10 @@ from DashAI.back.dependencies.database.models import Dataset
 from DashAI.back.job.base_job import JobError
 from DashAI.back.units.base_unit import BaseUnit
 from DashAI.back.units.context import ExecutionContext
-from DashAI.back.units.explanation_artifacts import dump_explanation
+from DashAI.back.units.explanation_artifacts import (
+    dump_explanation,
+    load_persisted_preprocessor,
+)
 
 log = logging.getLogger(__name__)
 
@@ -220,16 +223,30 @@ class GenerateLocalExplanationUnit(BaseUnit):
     indexes address rows that do not correspond, so the split is recomputed
     from the session's ratios instead. That derived state is resolved here,
     inside ``execute``, and never published.
+
+    When the session preprocessed its data ahead of training, the instances
+    are transformed by the persisted ``final.pkl`` before anything selects
+    columns from them: the input columns the session records are the names
+    the converters produced, which the raw rows do not have. The explainer
+    was fitted on data ``PrepareExplanationDataUnit`` transformed the same
+    way, so both sides of the explanation meet in the model's feature space.
     """
 
     SCHEMA = GenerateLocalExplanationSchema
 
     REQUIRES = ("explainer", "data_x", "data_y", "task", "split_indexes")
     PROVIDES = ("explanation_path", "plots_path", "input_dataset_path")
-    RUNTIME_PARAMS = ("session_splits",)
+    RUNTIME_PARAMS = ("session_splits", "preprocessing_artifacts_path")
 
-    def _select_instances(self, prepared_instance, splits, instance, task):
-        """Narrow the loaded dataset down to the instances to explain."""
+    def _select_instances(
+        self, prepared_instance, splits, instance, task, preprocessor
+    ):
+        """Narrow the loaded dataset down to the instances to explain.
+
+        ``preprocessor`` is the session's fitted ``SessionPreprocessor``, or
+        ``None`` when the session had no steps. It runs before the columns are
+        selected in every mode, because the selection names its outputs.
+        """
         import json
 
         from datasets import DatasetDict
@@ -261,12 +278,16 @@ class GenerateLocalExplanationUnit(BaseUnit):
                 manual_input_data,
                 f"{instance.file_path}/dataset",
             )
+            if preprocessor is not None:
+                prepared_instance = preprocessor.transform_dataset(prepared_instance)
             # Manual input carries only the input columns (no target), so
             # keep just those instead of the standard input/output split.
             # select_columns returns a DashAIDataset (same shape the
             # split path produces), which is what the explainers expect.
             return prepared_instance.select_columns(input_columns)
 
+        if preprocessor is not None:
+            prepared_instance = preprocessor.transform_dataset(prepared_instance)
         prepared_instance = task.prepare_for_task(
             prepared_instance,
             input_columns=input_columns,
@@ -353,6 +374,15 @@ class GenerateLocalExplanationUnit(BaseUnit):
         explainer_id = self.config["explainer_id"]
         instance_id = self.config["instance_dataset_id"]
 
+        # Loaded ahead of the fit, and outside the wrapper below on purpose: a
+        # missing artifact is not a problem with the selected instances.
+        artifacts_path = self.config.get("preprocessing_artifacts_path")
+        preprocessor = (
+            load_persisted_preprocessor(artifacts_path)
+            if artifacts_path is not None
+            else None
+        )
+
         # Fitting happens before the instances are even looked up, and is left
         # unwrapped on purpose: the explainer's own error is what the user gets.
         explainer.fit(dataset, **(self.config["fit_parameters"] or {}))
@@ -376,12 +406,15 @@ class GenerateLocalExplanationUnit(BaseUnit):
                 ) from e
 
             try:
-                x = self._select_instances(loaded_instance, splits, instance, task)
+                x = self._select_instances(
+                    loaded_instance, splits, instance, task, preprocessor
+                )
 
-                # Persist the original selected rows (the model input for each
-                # explained instance) as a DashAIDataset before the model's own
-                # preprocessing runs, so the frontend can read them back with
-                # the existing dataset endpoints.
+                # Persist the selected rows (the model input for each explained
+                # instance, session preprocessing already applied) as a
+                # DashAIDataset before the model's own preprocessing runs, so
+                # the frontend can read them back with the existing dataset
+                # endpoints.
                 input_source = x["train"] if isinstance(x, DatasetDict) else x
                 input_dataset_path = os.path.join(
                     config["EXPLANATIONS_PATH"],

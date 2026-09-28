@@ -241,6 +241,8 @@ EXPECTED_RUNTIME_PARAMS = {
     ("BuildManualInputUnit", "train_dataset_file_path"),
     ("ApplySessionPreprocessingUnit", "preprocessing_artifacts_path"),
     ("GenerateLocalExplanationUnit", "session_splits"),
+    ("GenerateLocalExplanationUnit", "preprocessing_artifacts_path"),
+    ("PrepareExplanationDataUnit", "preprocessing_artifacts_path"),
     ("ComputeDatasetMetadataUnit", "trust_inherited_metadata"),
     ("BuildModelUnit", "run_id"),
     ("EvaluateModelUnit", "run_id"),

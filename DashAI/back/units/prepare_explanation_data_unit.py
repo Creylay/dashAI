@@ -13,6 +13,7 @@ from DashAI.back.core.utils import MultilingualString
 from DashAI.back.job.base_job import JobError
 from DashAI.back.units.base_unit import BaseUnit
 from DashAI.back.units.context import ExecutionContext
+from DashAI.back.units.explanation_artifacts import load_persisted_preprocessor
 
 if TYPE_CHECKING:
     from DashAI.back.tasks.base_task import BaseTask
@@ -90,6 +91,17 @@ class PrepareExplanationDataUnit(BaseUnit):
     ``predict``, and preparing beforehand would break the ones that replace
     their input columns with derived features — while targets are encoded,
     because explainers compare them against the model's class indexes.
+
+    Session preprocessing is another matter: converters the session fitted
+    ahead of training (``PreprocessingJob``) are not part of the model, and
+    the input columns the session records are the names they produced. When
+    ``preprocessing_artifacts_path`` is supplied, the persisted ``final.pkl``
+    is applied to the whole dataset before the split is replayed, so the
+    explainer's data is in the feature space the model was trained on. The
+    transformed dataset stays local to this unit: ``dataset`` in the context
+    is left as it was loaded, since nothing downstream reads it and a unit
+    that rewrote a key it requires would blur what it consumes and what it
+    produces.
     """
 
     SCHEMA = PrepareExplanationDataSchema
@@ -101,6 +113,10 @@ class PrepareExplanationDataUnit(BaseUnit):
     # id — ``BuildManualInputUnit``, for one.
     REQUIRES = ("dataset", "model", "split_indexes")
     PROVIDES = ("data_x", "data_y", "task")
+    # Supplied by the job only when the session declared preprocessing steps;
+    # absent, there is nothing to apply. A path rather than the unpickled
+    # object so a graph node can supply it like any other artifact location.
+    RUNTIME_PARAMS = ("preprocessing_artifacts_path",)
 
     def __init__(self, **config) -> None:
         super().__init__(**config)
@@ -149,6 +165,11 @@ class PrepareExplanationDataUnit(BaseUnit):
         splits = ctx.require("split_indexes")
         input_columns = self.config["input_columns"]
         output_columns = self.config["output_columns"]
+
+        artifacts_path = self.config.get("preprocessing_artifacts_path")
+        if artifacts_path is not None:
+            preprocessor = load_persisted_preprocessor(artifacts_path)
+            loaded_dataset = preprocessor.transform_dataset(loaded_dataset)
 
         loaded_dataset = split_dataset(
             loaded_dataset,

@@ -225,6 +225,44 @@ def fixture_explanations_path(tmp_path):
     del di["config"]
 
 
+@pytest.fixture(name="persisted_binarizer")
+def fixture_persisted_binarizer(tmp_path, registry):
+    """A ``final.pkl`` the way ``PreprocessingJob`` leaves it.
+
+    One real converter, fitted through ``SessionPreprocessor`` on the stored
+    rows and pickled under an artifacts directory. The Binarizer keeps its
+    scope column and adds ``bin_a`` next to it, so a session that trained on
+    it records ``bin_a`` as an input column, a name the raw rows do not have.
+    Threshold 1 puts the boundary inside the train split (``a`` is 0, 1, 2).
+    """
+    from DashAI.back.converters.scikit_learn.binarizer import Binarizer
+    from DashAI.back.preprocessing.column_ref import (
+        ConverterSequence,
+        ConverterStep,
+        RawColumnRef,
+    )
+    from DashAI.back.preprocessing.session_preprocessor import SessionPreprocessor
+
+    registry["Binarizer"] = {"class": Binarizer}
+    sequence = ConverterSequence(
+        steps=[
+            ConverterStep(
+                converter="Binarizer",
+                params={"threshold": 1.0},
+                scope=[RawColumnRef(name="a")],
+            )
+        ]
+    )
+    preprocessor = SessionPreprocessor(sequence, registry)
+    preprocessor.fit_transform({"train": _dataset()})
+
+    artifacts = tmp_path / "preprocessing"
+    artifacts.mkdir()
+    with open(artifacts / "final.pkl", "wb") as handle:
+        pickle.dump(preprocessor, handle)
+    return str(artifacts)
+
+
 # --- LoadRunModelUnit ---------------------------------------------------
 
 
@@ -424,6 +462,60 @@ def test_prepare_composes_after_a_loader_that_publishes_no_dataset_id(registry):
 
     assert not ctx.has("dataset_id")
     assert len(ctx.require("data_x")["train"]) == 3
+
+
+def test_prepare_applies_the_persisted_preprocessor_before_the_split(
+    registry, persisted_binarizer
+):
+    """The session's input columns are the converter's outputs, so they only
+    exist once ``final.pkl`` has run over the loaded rows. It runs before the
+    split is replayed, the way training saw the data."""
+    ctx = _prepared_context(registry)
+
+    _prepare_unit(
+        input_columns=["bin_a", "b"],
+        preprocessing_artifacts_path=persisted_binarizer,
+    )(ctx)
+
+    data_x = ctx.require("data_x")
+    assert sorted(data_x.keys()) == ["test", "train", "validation"]
+    assert sum(len(split) for split in data_x.values()) == 6
+    for split in data_x.values():
+        assert split.column_names == ["bin_a", "b"]
+        # a equals b in the stored rows, so a row's bin_a is its b thresholded
+        # at 1. Checked row by row rather than against a fixed list: the unit
+        # splits twice and the second pass does not keep the rows in index
+        # order, which is inherited behaviour and not what this test is about.
+        assert list(split["bin_a"]) == [int(value > 1) for value in split["b"]]
+    assert ctx.require("data_y")["train"].column_names == ["target"]
+
+
+def test_prepare_leaves_the_loaded_dataset_in_the_context_untouched(
+    registry, persisted_binarizer
+):
+    """The transformed rows are consumed here and never written back: the unit
+    requires ``dataset`` and does not promise it, and nothing after it reads
+    the key. Pinned so the choice is deliberate rather than accidental."""
+    ctx = _prepared_context(registry)
+
+    _prepare_unit(
+        input_columns=["bin_a", "b"],
+        preprocessing_artifacts_path=persisted_binarizer,
+    )(ctx)
+
+    assert ctx.require("dataset").column_names == ["a", "b", "target"]
+
+
+def test_prepare_without_an_artifacts_path_applies_nothing(
+    registry, persisted_binarizer
+):
+    """The pickle existing on disk changes nothing on its own; only a session
+    that declared steps hands the path over."""
+    ctx = _prepared_context(registry)
+
+    _prepare_unit()(ctx)
+
+    assert ctx.require("data_x")["train"].column_names == ["a", "b"]
 
 
 # --- GenerateGlobalExplanationUnit --------------------------------------
@@ -661,3 +753,87 @@ def test_the_published_paths_are_plain_strings(registry, fake_db, explanations_p
     refs = ctx.to_dict()
     for key in ("explanation_path", "plots_path", "input_dataset_path"):
         assert isinstance(refs[key], str), key
+
+
+# --- session preprocessing on the explained instances --------------------
+
+
+def _saved_instances(ctx):
+    return load_dataset(str(Path(ctx.require("input_dataset_path")) / "dataset"))
+
+
+def test_manual_instances_are_transformed_before_the_columns_are_selected(
+    registry, fake_db, explanations_path, persisted_binarizer
+):
+    """Manual input carries the raw feature the converter scoped on, never the
+    column it produced. The persisted preprocessor runs on what the task built
+    from the typed rows, and only then are the session's input columns picked
+    out of it."""
+    ctx = _local_context(registry)
+
+    _local_unit(
+        scope={"mode": "manual"},
+        manual_input_data=[{"a": 0}, {"a": 3}],
+        input_columns=["bin_a"],
+        preprocessing_artifacts_path=persisted_binarizer,
+    )(ctx)
+
+    saved = _saved_instances(ctx)
+    assert saved.column_names == ["bin_a"]
+    assert saved["bin_a"] == [0, 1]
+    assert ctx.require("explainer").explained_columns == ["bin_a"]
+
+
+def test_marked_rows_are_transformed_before_the_task_prepares_them(
+    registry, fake_db, explanations_path, persisted_binarizer
+):
+    ctx = _local_context(registry)
+
+    _local_unit(
+        scope={"mode": "rows", "row_indexes": [0, 3]},
+        input_columns=["bin_a", "b"],
+        preprocessing_artifacts_path=persisted_binarizer,
+    )(ctx)
+
+    saved = _saved_instances(ctx)
+    assert saved.column_names == ["bin_a", "b"]
+    assert saved["bin_a"] == [0, 1]
+
+
+def test_a_split_share_is_transformed_before_the_task_prepares_it(
+    registry, fake_db, explanations_path, persisted_binarizer
+):
+    """The rows are transformed as a whole before the run's split is replayed
+    over them, so the indexes still address the same rows."""
+    ctx = _local_context(registry)
+
+    _local_unit(
+        scope={"split": "test", "percentage": 100},
+        input_columns=["bin_a", "b"],
+        preprocessing_artifacts_path=persisted_binarizer,
+    )(ctx)
+
+    saved = _saved_instances(ctx)
+    assert saved.column_names == ["bin_a", "b"]
+    assert len(saved) == 2
+    assert saved["bin_a"] == [1, 1]
+
+
+def test_instances_without_an_artifacts_path_stay_raw(
+    registry, fake_db, explanations_path, persisted_binarizer
+):
+    ctx = _local_context(registry)
+
+    _local_unit(scope={"mode": "rows", "row_indexes": [0, 3]})(ctx)
+
+    saved = _saved_instances(ctx)
+    assert saved.column_names == ["a", "b"]
+    assert saved["a"] == [0, 3]
+
+
+def test_the_artifacts_path_never_reaches_the_form(registry):
+    """It is chosen by the job from the session row, so it is runtime
+    configuration on both units that apply it, and never a schema field."""
+    for unit in (PrepareExplanationDataUnit, GenerateLocalExplanationUnit):
+        assert "preprocessing_artifacts_path" in unit.RUNTIME_PARAMS, unit
+        assert "preprocessing_artifacts_path" not in unit.SCHEMA.model_fields, unit
