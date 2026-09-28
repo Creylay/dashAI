@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from fastapi import status
 from fastapi.encoders import jsonable_encoder
@@ -10,6 +10,9 @@ from sqlalchemy import exc
 from DashAI.back.dependencies.database.models import Dataset, ModelSession, Prediction
 from DashAI.back.job.base_job import BaseJob, JobError
 from DashAI.back.splitters.splits_payload import run_split_indexes
+from DashAI.back.units.apply_session_preprocessing_unit import (
+    ApplySessionPreprocessingUnit,
+)
 from DashAI.back.units.build_manual_input_unit import BuildManualInputUnit
 from DashAI.back.units.context import ExecutionContext
 from DashAI.back.units.load_dataset_unit import LoadDatasetUnit
@@ -25,6 +28,18 @@ if TYPE_CHECKING:
 
 logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
+
+
+def _preprocessing_artifacts_path(model_session: ModelSession) -> Optional[str]:
+    """Where the session's fitted preprocessor lives, or None when it has none.
+
+    A session preprocesses when it declares steps; only then does the
+    artifacts path mean anything, so the two are read together and the path
+    alone travels to the unit that applies it.
+    """
+    if model_session.preprocessing and model_session.preprocessing.get("steps"):
+        return model_session.preprocessing_artifacts_path
+    return None
 
 
 def _build_preview_rows(
@@ -144,6 +159,7 @@ def run_manual_prediction(
         input_columns = list(model_session.input_columns)
         output_columns = list(model_session.output_columns)
         train_dataset_file_path = dataset_trained.file_path
+        preprocessing_artifacts_path = _preprocessing_artifacts_path(model_session)
 
     ctx = ExecutionContext()
 
@@ -151,6 +167,9 @@ def run_manual_prediction(
         task_name=task_name,
         train_dataset_file_path=train_dataset_file_path,
         manual_input_data=manual_input_data,
+    )
+    apply_preprocessing = ApplySessionPreprocessingUnit(
+        preprocessing_artifacts_path=preprocessing_artifacts_path,
     )
     predict = PredictUnit(
         task_name=task_name,
@@ -194,11 +213,17 @@ def run_manual_prediction(
 
         try:
             build_input(ctx)
+            # Hand-typed rows carry the raw columns; a session that preprocesses
+            # was trained on derived ones, and its input columns only exist
+            # once the fitted preprocessor has run over the rows.
+            apply_preprocessing(ctx)
             predict(ctx)
-            # Re-derived here rather than published by the unit: a narrowed view
-            # of the dataset is exactly the kind of derived value that must not
-            # cross a unit boundary, since anything upstream may reshape it.
-            prepared_dataset = ctx.require("dataset").select_columns(input_columns)
+            # The preview shows what the model saw, so it is narrowed from the
+            # model input and not from the raw rows. Re-derived here rather
+            # than published by the unit: a narrowed view of the dataset is
+            # exactly the kind of derived value that must not cross a unit
+            # boundary, since anything upstream may reshape it.
+            prepared_dataset = ctx.require("model_input").select_columns(input_columns)
         except (ValueError, TypeError) as e:
             logging.exception("Manual prediction input error: %s", e)
             raise HTTPException(
@@ -451,6 +476,16 @@ class PredictJob(BaseJob):
                         train_dataset_file_path=dataset_trained.file_path,
                         manual_input_data=manual_input_data,
                     )(ctx)
+
+                # After the narrowing and before the prediction: the fitted
+                # preprocessor runs over exactly the rows that were asked for,
+                # and the model reads the columns it was trained on from what
+                # it publishes. The raw rows stay under "dataset" for the save.
+                ApplySessionPreprocessingUnit(
+                    preprocessing_artifacts_path=_preprocessing_artifacts_path(
+                        model_session
+                    ),
+                )(ctx)
 
                 self.report_progress(0.4, "Running prediction")
                 predict(ctx)

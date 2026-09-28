@@ -492,6 +492,9 @@ from DashAI.back.tasks.translation_task import TranslationTask
 # Units
 from DashAI.back.units.apply_converter_unit import ApplyConverterUnit
 from DashAI.back.units.apply_dataset_schema_unit import ApplyDatasetSchemaUnit
+from DashAI.back.units.apply_session_preprocessing_unit import (
+    ApplySessionPreprocessingUnit,
+)
 from DashAI.back.units.build_global_explainer_unit import BuildGlobalExplainerUnit
 from DashAI.back.units.build_local_explainer_unit import BuildLocalExplainerUnit
 from DashAI.back.units.build_manual_input_unit import BuildManualInputUnit
@@ -721,6 +724,7 @@ def get_initial_components():
         LoadTrainedModelUnit,
         LoadTrainingDatasetUnit,
         BuildManualInputUnit,
+        ApplySessionPreprocessingUnit,
         PredictUnit,
         SavePredictionUnit,
         LoadRunModelUnit,

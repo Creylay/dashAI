@@ -23,6 +23,7 @@ EXPECTED_UNITS = {
     "LoadTrainedModelUnit",
     "LoadTrainingDatasetUnit",
     "BuildManualInputUnit",
+    "ApplySessionPreprocessingUnit",
     "PredictUnit",
     "SavePredictionUnit",
     "LoadRunModelUnit",
@@ -117,6 +118,9 @@ def test_unit_schemas_describe_their_configuration(units):
     # serialised belongs to the explorer that produced it.
     assert set(units["SaveExplorationUnit"]["schema"]["properties"]) == {"explorer_id"}
     assert set(units["LoadTrainedModelUnit"]["schema"]["properties"]) == {"run_id"}
+    # Nothing to choose: the fitted preprocessor is the session's, and where it
+    # lives is a runtime param the job reads off the session row.
+    assert units["ApplySessionPreprocessingUnit"]["schema"]["properties"] == {}
     assert set(units["PredictUnit"]["schema"]["properties"]) == {
         "task_name",
         "input_columns",
@@ -235,6 +239,7 @@ EXPECTED_RUNTIME_PARAMS = {
     ("LoadUploadedDatasetUnit", "temp_path"),
     ("LoadTrainingDatasetUnit", "train_dataset_file_path"),
     ("BuildManualInputUnit", "train_dataset_file_path"),
+    ("ApplySessionPreprocessingUnit", "preprocessing_artifacts_path"),
     ("GenerateLocalExplanationUnit", "session_splits"),
     ("ComputeDatasetMetadataUnit", "trust_inherited_metadata"),
     ("BuildModelUnit", "run_id"),
