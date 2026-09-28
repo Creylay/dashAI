@@ -3,7 +3,7 @@
 import logging
 import math
 from abc import ABCMeta, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Final, final
+from typing import TYPE_CHECKING, Any, Dict, Final, Optional, final
 
 from kink import di
 
@@ -242,44 +242,44 @@ class BaseModel(ConfigObject, metaclass=ABCMeta):
 
             db.commit()
 
-    @final
-    def compute_metrics(
+    def _score_split(
         self,
-        split: SplitEnum = SplitEnum.VALIDATION,
+        split: SplitEnum,
         x_data: "DashAIDataset" = None,
         y_data: "DashAIDataset" = None,
-    ) -> Dict[str, float]:
-        """Score a data split with this model's metrics, without persisting.
+    ) -> Optional[Dict[str, float]]:
+        """Score the metrics declared for a split, dropping non-finite results.
 
-        Which metrics are computed is decided by the model rather than by the
-        caller: ``ModelFactory`` attaches the metric classes and the data
-        splits to the instance, and this reads them off it.
-
-        Separate from :meth:`calculate_metrics` so a caller with no run to log
-        against can still have the numbers. A pipeline is that caller: it has
-        no ``Run`` row, so there is no foreign key for a ``Metric`` row to
-        point at, and its results are recorded as an artifact instead. Both
-        paths score through here, so the two cannot disagree.
+        This is the one scoring loop behind ``calculate_metrics``, which
+        persists the scores, and ``compute_metrics``, which returns them. They
+        used to carry a copy each and the copies drifted: only the logging one
+        dropped non-finite scores, so a NaN that was too suspect to write to
+        the database still reached the objective of an HPO trial through the
+        other, and poisoned every comparison downstream of it.
 
         Parameters
         ----------
         split : SplitEnum
-            The data split to evaluate. Defaults to ``SplitEnum.VALIDATION``.
+            The data split to evaluate (TRAIN, VALIDATION, or TEST).
         x_data : DashAIDataset, optional
-            Input features. Defaults to the split stored on the model.
+            Input features. If None, the dataset stored in the model for the
+            given split is used. Defaults to None.
         y_data : DashAIDataset, optional
-            Target labels. Defaults to the split stored on the model.
+            Target labels. If None, the labels stored in the model for the
+            given split are used. Defaults to None.
 
         Returns
         -------
-        Dict[str, float]
-            Metric name to score. Empty when every metric returned a
-            non-finite value. ``None`` when there is nothing to score at all:
-            no metrics configured, or no data for this split.
+        Optional[Dict[str, float]]
+            The finite scores keyed by metric name, or None when there was
+            nothing to score: no metrics declared for the split, or no data
+            available for it. None and an empty dict are different answers --
+            the first says the question could not be asked, the second that
+            every metric was asked and none returned a usable number.
         """
-        metrics_attr = f"{split.value}_metrics"
-        metrics = getattr(self, metrics_attr, None)
+        metrics = getattr(self, f"{split.value}_metrics", None)
 
+        # No metrics declared for this split: nothing to ask.
         if not metrics:
             return None
 
@@ -290,7 +290,7 @@ class BaseModel(ConfigObject, metaclass=ABCMeta):
             x_data = self.x_data[split.value]
             y_data = self.y_data[split.value]
 
-        # If data is empty after retrieval, skip calculation
+        # If data is empty after retrieval, there is nothing to score
         if x_data is None or y_data is None:
             return None
 
@@ -314,6 +314,46 @@ class BaseModel(ConfigObject, metaclass=ABCMeta):
             results[metric.__name__] = score
 
         return results
+
+    @final
+    def compute_metrics(
+        self,
+        split: SplitEnum = SplitEnum.VALIDATION,
+        x_data: "DashAIDataset" = None,
+        y_data: "DashAIDataset" = None,
+    ) -> Optional[Dict[str, float]]:
+        """Score a data split with this model's metrics, without persisting.
+
+        Which metrics are computed is decided by the model rather than by the
+        caller: ``ModelFactory`` attaches the metric classes and the data
+        splits to the instance, and this reads them off it.
+
+        Separate from :meth:`calculate_metrics` so a caller with no run to log
+        against can still have the numbers. A pipeline is that caller: it has
+        no ``Run`` row, so there is no foreign key for a ``Metric`` row to
+        point at, and its results are recorded as an artifact instead. Both
+        paths score through :meth:`_score_split`, so the two cannot disagree.
+
+        Parameters
+        ----------
+        split : SplitEnum
+            The data split to evaluate. Defaults to ``SplitEnum.VALIDATION``.
+        x_data : DashAIDataset, optional
+            Input features. Defaults to the split stored on the model.
+        y_data : DashAIDataset, optional
+            Target labels. Defaults to the split stored on the model.
+
+        Returns
+        -------
+        Dict[str, float] or None
+            Metric name to score. A metric that scored a non-finite value is
+            absent from the mapping rather than present with a NaN, so the
+            mapping is empty when every metric returned one. ``None`` when
+            there is nothing to score at all: no metrics configured, or no
+            data for this split. Callers that need a particular metric must
+            therefore check that it is there.
+        """
+        return self._score_split(split, x_data=x_data, y_data=y_data)
 
     @final
     def calculate_metrics(
@@ -372,10 +412,13 @@ class BaseModel(ConfigObject, metaclass=ABCMeta):
         # happened to never reach the attribute for such a model because it
         # checked for metrics first. Treating "no attribute" as "no run" keeps
         # that path working and is the same answer for any caller that has one.
+        # It is checked before scoring rather than after: without a run there
+        # is nowhere to persist the result, and predicting only to discard the
+        # numbers is wasted work.
         if not getattr(self, "run_id", None):
             return None
 
-        results = self.compute_metrics(split=split, x_data=x_data, y_data=y_data)
+        results = self._score_split(split, x_data=x_data, y_data=y_data)
         if results is None:
             return None
 

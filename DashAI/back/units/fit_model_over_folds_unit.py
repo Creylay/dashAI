@@ -1,6 +1,7 @@
 """Unit that fits a model across cross-validation folds."""
 
 import logging
+import math
 
 import numpy as np
 
@@ -165,7 +166,7 @@ class FitModelOverFoldsUnit(BaseUnit, ModelFitScopeMixin):
         scores = []
         accumulated: dict = {}
 
-        for x_fold, y_fold in self._folds(x_folds, y_folds):
+        for index, (x_fold, y_fold) in enumerate(self._folds(x_folds, y_folds)):
             # Pointed at the fold it is about to be fitted on, the same as in
             # the scoring loop. Nothing here reads it back, but the model is
             # expected to carry the data it was last fitted on -- that is what
@@ -176,7 +177,29 @@ class FitModelOverFoldsUnit(BaseUnit, ModelFitScopeMixin):
             self._fit_kept_model(model, x_fold, y_fold)
             predictions = model.predict(x_fold["validation"])
             expected = model.prepare_output(y_fold["validation"], is_fit=False)
-            scores.append(metric.score(expected, predictions))
+            score = metric.score(expected, predictions)
+
+            # A fold whose objective is not a number is not a fold to skip:
+            # the objective would then be the mean of a different set of folds
+            # on each trial, and those means are not comparable. Nor may it
+            # flow into the mean, where NaN compares False against every other
+            # trial in both directions, so the trial that produced it could
+            # never be beaten and could never win. Name what happened and stop.
+            #
+            # RuntimeError and not ValueError on purpose: `study.optimize` runs
+            # with `catch=UNFITTABLE_TRIAL_ERRORS`, which includes ValueError,
+            # so a ValueError raised here would be swallowed into "all N trials
+            # failed, narrow the ranges and try again", the wrong advice for a
+            # run whose optimization metric is undefined on the fold's data.
+            # The inner trials of a nested search score through here too.
+            if not math.isfinite(score):
+                raise RuntimeError(
+                    f"Fold {index} scored a non-finite value ({score}) for the "
+                    f"optimization metric '{metric.__name__}'. Check that the "
+                    "metric is defined for the fold's data (a classification "
+                    "metric on a fold with a single class, say)."
+                )
+            scores.append(score)
 
             for name in scored_splits:
                 results = model.compute_metrics(split=SplitEnum[name])

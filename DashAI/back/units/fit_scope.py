@@ -18,7 +18,7 @@ every unit that inherited it.
 """
 
 import logging
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from DashAI.back.core.schema_fields import (
     bool_field,
@@ -276,7 +276,7 @@ class ModelFitScopeMixin:
         run_id,
         artifact_prefix,
         objective,
-    ) -> Tuple[object, dict, List[str]]:
+    ) -> Tuple[object, dict, List[Optional[str]]]:
         """Run the hyperparameter search and report what it produced.
 
         Parameters
@@ -303,7 +303,9 @@ class ModelFitScopeMixin:
         -------
         tuple
             The fitted model, the parameter tree with the best values in it,
-            and the paths of the plots the search produced.
+            and the paths of the plots the search produced, one slot per plot
+            the optimizer lists. A slot is ``None`` where the optimizer
+            reported that the plot does not apply to this search.
         """
         import os
         import pickle
@@ -325,7 +327,6 @@ class ModelFitScopeMixin:
         best_parameters = factory.update_parameters(old_parameters, best_params)
 
         config = di["config"]
-        plot_paths: List[str] = []
         trials = optimizer.get_trials_values()
         plot_filenames, plots = optimizer.create_plots(
             trials,
@@ -334,12 +335,22 @@ class ModelFitScopeMixin:
             goal_metric=goal_metric,
             artifact_prefix=artifact_prefix,
         )
-        normalized_plots = normalize_artifacts(plots)
-        for filename, plot in zip(plot_filenames, normalized_plots, strict=False):
-            plot_path = os.path.join(config["RUNS_PATH"], filename)
+
+        # A plot the optimizer skipped keeps its slot rather than letting the
+        # ones after it slide forward: the caller writes these paths into four
+        # fixed columns of the run, by position. The contour plot is the one
+        # that gets skipped, when fewer than two searched parameters are
+        # numeric, and normalizing its None would pickle the text "None" into
+        # the contour slot, a file that exists and holds no plot.
+        filled = [index for index, plot in enumerate(plots) if plot is not None]
+        normalized_plots = normalize_artifacts([plots[index] for index in filled])
+
+        plot_paths: List[Optional[str]] = [None] * len(plots)
+        for index, plot in zip(filled, normalized_plots, strict=True):
+            plot_path = os.path.join(config["RUNS_PATH"], plot_filenames[index])
             with open(plot_path, "wb") as file:
                 pickle.dump(plot, file)
-                plot_paths.append(plot_path)
+            plot_paths[index] = plot_path
 
         return model, best_parameters, plot_paths
 

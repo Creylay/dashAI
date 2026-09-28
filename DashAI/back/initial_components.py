@@ -101,12 +101,6 @@ from DashAI.back.dataset_sources.zenodo_dataset_source import ZenodoDatasetSourc
 
 # Evaluation Strategies
 from DashAI.back.evaluation.cv import CrossValidationEvaluationStrategy
-from DashAI.back.evaluation.forecasting_cv import (
-    ForecastingCrossValidationEvaluationStrategy,
-)
-from DashAI.back.evaluation.forecasting_holdout import (
-    ForecastingHoldoutEvaluationStrategy,
-)
 from DashAI.back.evaluation.holdout import HoldoutEvaluationStrategy
 
 # Explainers
@@ -191,8 +185,6 @@ from DashAI.back.metrics.classification.matthews_corrcoef import MatthewsCorrCoe
 from DashAI.back.metrics.classification.precision import Precision
 from DashAI.back.metrics.classification.recall import Recall
 from DashAI.back.metrics.classification.roc_auc import ROCAUC
-from DashAI.back.metrics.forecasting.mape import MAPE
-from DashAI.back.metrics.forecasting.smape import SMAPE
 from DashAI.back.metrics.regression.explained_variance import ExplainedVariance
 from DashAI.back.metrics.regression.mae import MAE
 from DashAI.back.metrics.regression.median_absolute_error import MedianAbsoluteError
@@ -205,14 +197,6 @@ from DashAI.back.metrics.translation.ter import Ter
 from DashAI.back.models.cnn_image_classifier import CNNImageClassifier
 from DashAI.back.models.efficientnet_b0_image_classifier import (
     EfficientNetB0ImageClassifier,
-)
-from DashAI.back.models.forecasting.arima import ARIMA
-from DashAI.back.models.forecasting.exponential_smoothing import (
-    ExponentialSmoothing,
-)
-from DashAI.back.models.forecasting.naive import NaiveForecaster
-from DashAI.back.models.forecasting.seasonal_naive import (
-    SeasonalNaiveForecaster,
 )
 
 # Models
@@ -320,7 +304,6 @@ from DashAI.back.models.hugging_face.xlm_roberta_transformer import (
 from DashAI.back.models.hugging_face.xlnet_transformer import XlnetTransformer
 from DashAI.back.models.lenet5_image_classifier import LeNet5ImageClassifier
 from DashAI.back.models.mlp_image_classifier import MLPImageClassifier
-from DashAI.back.models.pymc.bart_regression import BARTRegression
 from DashAI.back.models.RAG import RAGPipeline
 from DashAI.back.models.RAG.chunking_models import (
     CharacterChunkModel,
@@ -337,9 +320,9 @@ from DashAI.back.models.RAG.embeddings.dense import (
     SentenceTransformerEmbedding,
 )
 from DashAI.back.models.RAG.extractors import (
-    EasyOCRExtractor,
+    PdfMinerExtractor,
+    PdfPlumberExtractor,
     PlainTextExtractor,
-    PyMuPDFExtractor,
     PypdfExtractor,
 )
 from DashAI.back.models.RAG.prompts import (
@@ -452,11 +435,6 @@ from DashAI.back.reports.classification.precision_recall_curve import (
     PrecisionRecallCurve,
 )
 from DashAI.back.reports.classification.roc_curve import RocCurve
-from DashAI.back.reports.forecasting.forecast_vs_actual import ForecastVsActual
-from DashAI.back.reports.forecasting.residual_autocorrelation import (
-    ResidualAutocorrelation,
-)
-from DashAI.back.reports.forecasting.residuals_over_time import ResidualsOverTime
 from DashAI.back.reports.regression.predicted_vs_actual import PredictedVsActual
 from DashAI.back.reports.regression.residual_histogram import ResidualHistogram
 from DashAI.back.reports.regression.residual_plot import ResidualPlot
@@ -500,7 +478,6 @@ from DashAI.back.statistical_tests.wilcoxon_sr_test import (
     WilcoxonSRTest,
 )
 from DashAI.back.tasks.controlnet_task import ControlNetTask
-from DashAI.back.tasks.forecasting_task import ForecastingTask
 from DashAI.back.tasks.image_classification_task import ImageClassificationTask
 
 # Tasks
@@ -576,11 +553,6 @@ def get_initial_components():
         TextClassificationTask,
         TranslationTask,
         RegressionTask,
-        ForecastingTask,
-        NaiveForecaster,
-        SeasonalNaiveForecaster,
-        ARIMA,
-        ExponentialSmoothing,
         TextToImageGenerationTask,
         TextToTextGenerationTask,
         ControlNetTask,
@@ -596,7 +568,6 @@ def get_initial_components():
         BertinTransformer,
         BetoTransformer,
         BayesianRidgeRegression,
-        BARTRegression,
         DebertaV3Transformer,
         DecisionTreeClassifier,
         DecisionTreeRegression,
@@ -706,8 +677,6 @@ def get_initial_components():
         Chrf,
         MSE,
         RMSE,
-        MAPE,
-        SMAPE,
         MAE,
         R2,
         MedianAbsoluteError,
@@ -775,9 +744,6 @@ def get_initial_components():
         PredictedVsActual,
         ResidualPlot,
         ResidualHistogram,
-        ForecastVsActual,
-        ResidualsOverTime,
-        ResidualAutocorrelation,
         PerSegmentComparison,
         SegmentScoreDistribution,
         LengthComparison,
@@ -880,8 +846,6 @@ def get_initial_components():
         # Evaluation Strategies
         CrossValidationEvaluationStrategy,
         HoldoutEvaluationStrategy,
-        ForecastingHoldoutEvaluationStrategy,
-        ForecastingCrossValidationEvaluationStrategy,
         # Statistical tests
         AnovaTest,
         FriedmanTest,
@@ -898,9 +862,9 @@ def get_initial_components():
         RecursiveCharacterChunkModel,
         TokenChunkModel,
         # Extractors
-        EasyOCRExtractor,
         PypdfExtractor,
-        PyMuPDFExtractor,
+        PdfMinerExtractor,
+        PdfPlumberExtractor,
         PlainTextExtractor,
         # Encodings
         SentenceTransformerEmbedding,
