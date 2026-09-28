@@ -424,7 +424,6 @@ function CreateSessionSteps({
             setNewExp={setNewExp}
             setNextEnabled={setNextEnabled}
             dataset={selectedDataset}
-            datasetTypes={datasetTypes}
           />
         )}
 
