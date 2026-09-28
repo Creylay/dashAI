@@ -95,6 +95,23 @@ class StructureResult(BaseModel):
     valid: bool
 
 
+def known_width(items: List[StateItem]) -> Optional[int]:
+    """Return how many real columns the items stand for, if that is known.
+
+    A concrete column counts as one; a block counts as its `count`. None
+    when any block's size is only known after fit.
+    """
+    width = 0
+    for item in items:
+        if isinstance(item, ColumnItem):
+            width += 1
+        elif item.count is None:
+            return None
+        else:
+            width += item.count
+    return width
+
+
 def type_fields(dashai_type: Any) -> Tuple[Optional[str], Optional[str]]:
     """Return the (display name, dtype) pair the frontend shows for a type.
 

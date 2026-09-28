@@ -210,10 +210,17 @@ class BaseConverter(ConfigObject, ABC):
         type_name, dtype = type_fields(self.get_output_type(column_name))
         return item.model_copy(update={"type": type_name, "dtype": dtype})
 
-    def _default_blocks(self) -> List[StateItem]:
-        """One block of unknown size typed with this converter's output type."""
+    def _default_blocks(self, count: Optional[int] = None) -> List[StateItem]:
+        """One block typed with this converter's output type.
+
+        Parameters
+        ----------
+        count : int, optional
+            The block's column count, when params determine it. Defaults to
+            None (known only after fit).
+        """
         type_name, dtype = type_fields(self.get_output_type())
-        return [BlockItem(type=type_name, dtype=dtype)]
+        return [BlockItem(type=type_name, dtype=dtype, count=count)]
 
     def _selected_count(self, inputs: List[StateItem]) -> Optional[int]:
         """How many scope columns a "select" converter keeps, if params say.

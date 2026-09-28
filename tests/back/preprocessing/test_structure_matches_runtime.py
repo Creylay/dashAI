@@ -107,6 +107,32 @@ CASES = [
 ]
 
 
+# Cases whose output size follows from params and input columns alone: the
+# estimate must be exact (no block of unknown size), not just conservative.
+EXACT = {
+    "SimpleImputer[strategy=mean]",
+    "SimpleImputer[strategy=most_frequent]",
+    "KNNImputer",
+    "MissingIndicator",
+    "Binarizer",
+    "OrdinalEncoder",
+    "LabelEncoder",
+    "PCA[n_components=2]",
+    "IncrementalPCA[n_components=2]",
+    "TruncatedSVD[n_components=2]",
+    "FastICA[n_components=2]",
+    "Nystroem[n_components=5]",
+    "RBFSampler[n_components=5]",
+    "SkewedChi2Sampler[n_components=5]",
+    "AdditiveChi2Sampler",
+    "PolynomialFeatures[degree=2]",
+    "StandardScaler",
+    "MinMaxScaler",
+    "MaxAbsScaler",
+    "Normalizer",
+}
+
+
 def _converter_classes():
     return {
         cls.__name__: cls
@@ -171,6 +197,13 @@ def test_estimated_structure_matches_runtime(case):
     dataset = _dataset()
 
     delta = _build(cls, params).infer_output_columns(_scope_items(dataset, scope))
+    if _case_id(case) in EXACT:
+        unknown = [
+            item
+            for item in delta.added
+            if isinstance(item, BlockItem) and item.count is None
+        ]
+        assert unknown == [], "the estimate should know the output size"
 
     converter = _build(cls, params)
     x = dataset.select_columns(scope)
