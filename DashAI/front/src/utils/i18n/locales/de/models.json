@@ -75,7 +75,7 @@
     "allRepetitions": "Alle Wiederholungen",
     "alternativeHypothesis": "Alternativhypothese",
     "appliedConverters": "Angewendete Converter",
-    "applyPreprocessing": "Vorverarbeitung anwenden",
+    "applyPreprocessing": "Vorverarbeitung anwenden (erweitert)",
     "applyPreprocessingDescription": "Die ausgewählten Converter werden nur anhand der Trainingsdaten angepasst und auf den Rest angewendet, um Datenlecks zu vermeiden. Wird dies nicht angewendet, trainiert das Modell mit den Daten wie sie sind.",
     "availableExplainers": "Verfügbare Erklärungsmodelle",
     "availableModels": "Verfügbare Modelle",
