@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -29,9 +29,6 @@ class ColumnsValidationParams(BaseModel):
     # With preprocessing, the type of every input ref is taken from the
     # chain's estimated structure (see infer_structure).
     preprocessing: Optional[List[ConverterStep]] = None
-    # Legacy: group ref types computed by the frontend, used only when no
-    # preprocessing is sent.
-    converter_output_types: Optional[Dict[str, str]] = None
 
 
 class PreprocessingStructureParams(BaseModel):

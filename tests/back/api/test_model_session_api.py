@@ -127,28 +127,7 @@ def test_create_model_session_with_preprocessing_requires_input_column_refs(
     assert response.status_code == 422, response.text
 
 
-def test_validate_columns_accepts_a_group_ref_matching_the_task_type(
-    client: TestClient, dataset_1: Dataset
-) -> None:
-    response = client.post(
-        "/api/v1/model-session/validation",
-        json={
-            "task_name": "TabularClassificationTask",
-            "dataset_id": dataset_1.id,
-            "inputs_columns": ["SepalWidthCm"],
-            "outputs_columns": ["Species"],
-            "input_refs": [
-                {"kind": "raw", "name": "SepalWidthCm"},
-                {"kind": "group", "step": 0},
-            ],
-            "converter_output_types": {"0": "Integer"},
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["dataset_status"] == "valid"
-
-
-def test_validate_columns_rejects_a_group_ref_with_an_incompatible_type(
+def test_validate_columns_rejects_group_refs_without_preprocessing(
     client: TestClient, dataset_1: Dataset
 ) -> None:
     response = client.post(
@@ -159,43 +138,6 @@ def test_validate_columns_rejects_a_group_ref_with_an_incompatible_type(
             "inputs_columns": [],
             "outputs_columns": ["Species"],
             "input_refs": [{"kind": "group", "step": 0}],
-            "converter_output_types": {"0": "Text"},
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["dataset_status"] == "invalid"
-
-
-def test_validate_columns_accepts_a_slotted_group_ref_matching_the_task_type(
-    client: TestClient, dataset_1: Dataset
-) -> None:
-    response = client.post(
-        "/api/v1/model-session/validation",
-        json={
-            "task_name": "TabularClassificationTask",
-            "dataset_id": dataset_1.id,
-            "inputs_columns": [],
-            "outputs_columns": ["Species"],
-            "input_refs": [{"kind": "group", "step": 0, "slot": "Integer"}],
-            "converter_output_types": {"0:Integer": "Integer", "0:Categorical": "Text"},
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["dataset_status"] == "valid"
-
-
-def test_validate_columns_rejects_a_slotted_group_ref_with_an_incompatible_type(
-    client: TestClient, dataset_1: Dataset
-) -> None:
-    response = client.post(
-        "/api/v1/model-session/validation",
-        json={
-            "task_name": "TabularClassificationTask",
-            "dataset_id": dataset_1.id,
-            "inputs_columns": [],
-            "outputs_columns": ["Species"],
-            "input_refs": [{"kind": "group", "step": 0, "slot": "Categorical"}],
-            "converter_output_types": {"0:Integer": "Integer", "0:Categorical": "Text"},
         },
     )
     assert response.status_code == 200, response.text

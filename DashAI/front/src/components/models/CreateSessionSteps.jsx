@@ -264,6 +264,12 @@ function CreateSessionSteps({
       const hasValidation = hasPartition(newExp.splits, "validation");
       const hasTest = hasPartition(newExp.splits, "test");
 
+      // Steps added while the switch was on and then abandoned by turning
+      // it off must not be sent: the session would still preprocess.
+      const preprocessing = newExp.applyPreprocessing
+        ? newExp.preprocessing
+        : [];
+
       let effectiveName = sessionName;
       let response;
       try {
@@ -278,7 +284,7 @@ function CreateSessionSteps({
           hasTest ? allMetricNames : [],
           newExp.evaluation_strategy,
           JSON.stringify(newExp.splits),
-          newExp.preprocessing,
+          preprocessing,
           newExp.input_column_refs,
         );
       } catch (createError) {
@@ -296,7 +302,7 @@ function CreateSessionSteps({
             hasTest ? allMetricNames : [],
             newExp.evaluation_strategy,
             JSON.stringify(newExp.splits),
-            newExp.preprocessing,
+            preprocessing,
             newExp.input_column_refs,
           );
         } else {

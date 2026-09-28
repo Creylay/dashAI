@@ -85,7 +85,9 @@ export const validateColumns = async (
   inputColumns: string[],
   outputColumns: string[],
   inputRefs?: IColumnRef[],
-  converterOutputTypes?: Record<string, string>,
+  // With preprocessing, the backend types every input ref from the chain's
+  // estimated structure.
+  preprocessing?: IConverterStep[],
 ): Promise<object> => {
   const formData = {
     task_name: taskName,
@@ -93,7 +95,11 @@ export const validateColumns = async (
     inputs_columns: inputColumns,
     outputs_columns: outputColumns,
     input_refs: inputRefs,
-    converter_output_types: converterOutputTypes,
+    preprocessing: preprocessing?.map(({ converter, params, scope }) => ({
+      converter,
+      params,
+      scope,
+    })),
   };
   const response = await api.post<object>(
     "/v1/model-session/validation",

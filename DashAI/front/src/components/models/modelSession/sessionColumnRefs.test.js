@@ -5,7 +5,6 @@ import {
   slotFromGroupKey,
   refToKey,
   keyToRef,
-  buildColumnKeysAndTypes,
   buildStepDisplayNames,
   rawColumnsNeededFor,
   itemToRef,
@@ -40,112 +39,6 @@ describe("sessionColumnRefs", () => {
     expect(stepFromGroupKey(key)).toBe(2);
     expect(slotFromGroupKey(key)).toBe("Categorical");
     expect(slotFromGroupKey(groupKey(2))).toBeNull();
-  });
-
-  it("builds keys/types/labels for raw columns plus every prior step", () => {
-    const { allKeys, columnTypes, optionLabels } = buildColumnKeysAndTypes({
-      datasetTypes: { age: { type: "Integer" }, text: { type: "Text" } },
-      preprocessing: [
-        {
-          converter: "BagOfWordsConverter",
-          outputSlots: [{ slot: null, type: "Integer", dtype: "int64" }],
-        },
-        {
-          converter: "Binarizer",
-          outputSlots: [{ slot: null, type: "Integer", dtype: null }],
-        },
-      ],
-      uptoStep: 1,
-    });
-
-    expect(allKeys).toEqual(["age", "text", "__group__0"]);
-    expect(columnTypes.__group__0).toEqual({ type: "Integer", dtype: "int64" });
-    expect(optionLabels.__group__0).toBe("BagOfWordsConverter: output");
-    // step 1 (Binarizer) is excluded: uptoStep=1 only includes steps before it
-    expect(allKeys).not.toContain(groupKey(1));
-  });
-
-  it("includes every step when uptoStep is omitted", () => {
-    const { allKeys } = buildColumnKeysAndTypes({
-      datasetTypes: { age: { type: "Integer" } },
-      preprocessing: [
-        {
-          converter: "BagOfWordsConverter",
-          outputSlots: [{ slot: null, type: "Integer" }],
-        },
-        {
-          converter: "Binarizer",
-          outputSlots: [{ slot: null, type: "Integer" }],
-        },
-      ],
-    });
-
-    expect(allKeys).toEqual(["age", "__group__0", "__group__1"]);
-  });
-
-  it("offers one key per declared slot for a step with a heterogeneous scope", () => {
-    const { allKeys, columnTypes, optionLabels } = buildColumnKeysAndTypes({
-      datasetTypes: {},
-      preprocessing: [
-        {
-          converter: "SimpleImputer",
-          outputSlots: [
-            { slot: "Integer", type: "Integer", dtype: "int64" },
-            { slot: "Categorical", type: "Categorical", dtype: null },
-          ],
-        },
-      ],
-    });
-
-    const integerKey = groupKey(0, "Integer");
-    const categoricalKey = groupKey(0, "Categorical");
-    expect(allKeys).toEqual([integerKey, categoricalKey]);
-    expect(columnTypes[integerKey]).toEqual({
-      type: "Integer",
-      dtype: "int64",
-    });
-    expect(columnTypes[categoricalKey]).toEqual({
-      type: "Categorical",
-      dtype: null,
-    });
-    expect(optionLabels[integerKey]).toBe("SimpleImputer: output (Integer)");
-    expect(optionLabels[categoricalKey]).toBe(
-      "SimpleImputer: output (Categorical)",
-    );
-  });
-
-  it("disambiguates option labels for two steps of the same converter type", () => {
-    const { optionLabels } = buildColumnKeysAndTypes({
-      datasetTypes: {},
-      preprocessing: [
-        {
-          converter: "SimpleImputer",
-          outputSlots: [{ slot: null, type: "Float" }],
-        },
-        {
-          converter: "SimpleImputer",
-          outputSlots: [{ slot: null, type: "Float" }],
-        },
-      ],
-      convertersMeta: {
-        SimpleImputer: { display_name: "Simple Imputer" },
-      },
-    });
-
-    expect(optionLabels[groupKey(0)]).toBe("Simple Imputer: output");
-    expect(optionLabels[groupKey(1)]).toBe("Simple Imputer (2): output");
-  });
-
-  it("falls back to a single unslotted key for a step predating outputSlots", () => {
-    const { allKeys, columnTypes } = buildColumnKeysAndTypes({
-      datasetTypes: {},
-      preprocessing: [
-        { converter: "Binarizer", outputType: "Integer", outputDtype: "int64" },
-      ],
-    });
-
-    expect(allKeys).toEqual(["__group__0"]);
-    expect(columnTypes.__group__0).toEqual({ type: "Integer", dtype: "int64" });
   });
 
   describe("buildStepDisplayNames", () => {

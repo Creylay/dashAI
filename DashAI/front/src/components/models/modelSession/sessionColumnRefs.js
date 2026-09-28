@@ -1,21 +1,20 @@
 /**
  * Synthetic-key representation of a session's ColumnRef (see the backend's
- * DashAI.back.preprocessing.column_ref module). A raw dataset column is
- * just its own name; a converter's not-yet-materialized output group is
- * represented as a synthetic string key, so every UI piece that already
- * knows how to work with a flat `{name: string}` column list (Autocomplete
- * options, MaterialReactTable rows, columnTypes maps) can represent a group
- * without knowing groups exist at all.
+ * DashAI.back.preprocessing.column_ref module), so every UI piece that
+ * already works with a flat list of string column names (Autocomplete
+ * options, MaterialReactTable rows, columnTypes maps) can also represent
+ * what a converter produces, without knowing converters exist:
  *
- * A step's output isn't always one homogeneous type — e.g. SimpleImputer
- * with "most_frequent"/"constant" just preserves each scope column's own
- * type, so a scope mixing a categorical and a numeric column produces both
- * kinds of columns. `slot` (a DashAI type's display_name(), e.g.
- * "Categorical") picks out just the columns of one declared type from a
- * step's output, mirroring the backend's GroupColumnRef.slot /
- * SessionPreprocessor.resolved_slots. A step with only one declared type —
- * the common case, and everything before slots existed — has no slot
- * (`slot: null`), which means "the whole group," unchanged from before.
+ * - an original dataset column is just its own name;
+ * - a generated column whose name is known before fit (e.g. DateFeatures'
+ *   "date_month") is "__group__{step}__name__{name}";
+ * - a block of columns only known after fit (e.g. one-hot columns) is
+ *   "__group__{step}", or "__group__{step}__slot__{type}" when the step
+ *   outputs blocks of several types, mirroring the backend's
+ *   GroupColumnRef.slot and SessionPreprocessor.resolved_slots.
+ *
+ * Which of these exist at each point of a chain comes from the backend's
+ * estimated structure (see usePreprocessingStructure and stateToOptions).
  */
 
 const GROUP_KEY_PREFIX = "__group__";
@@ -137,31 +136,13 @@ export function labelForRef(ref, stepDisplayNames = []) {
     : `${stepName}: output (${ref.slot})`;
 }
 
-// A step's declared output, normalized to a list of slots — even a
-// homogeneous step (the common case) is one "slot" with slot: null, so
-// every caller iterates the same shape regardless of how many there are.
-// Falls back defensively for a step that predates outputSlots.
-function stepOutputSlots(step) {
-  if (Array.isArray(step?.outputSlots) && step.outputSlots.length > 0) {
-    return step.outputSlots;
-  }
-  return [
-    {
-      slot: null,
-      type: step?.outputType ?? null,
-      dtype: step?.outputDtype ?? null,
-    },
-  ];
-}
-
 /**
  * One display name per step, disambiguated when the sequence has more than
  * one step of the same converter type (same registry name, or same
- * fallback string when `convertersMeta` hasn't loaded yet) — the first
+ * fallback string when `convertersMeta` hasn't loaded yet): the first
  * occurrence keeps the bare name, later ones get " (2)", " (3)", etc., by
- * order of appearance. Computed over the FULL `steps` array regardless of
- * any later truncation (e.g. buildColumnKeysAndTypes's `uptoStep`), so a
- * step's numbering never shifts depending on which view is asking.
+ * order of appearance. Computed over the full `steps` array, so a step's
+ * numbering never shifts depending on which view is asking.
  */
 export function buildStepDisplayNames(steps, convertersMeta = {}) {
   const baseNames = (steps || []).map(
@@ -182,55 +163,10 @@ export function buildStepDisplayNames(steps, convertersMeta = {}) {
 }
 
 /**
- * Every column key a session's preprocessing sequence can be scoped over,
- * up to (and not including) `uptoStep`: every raw dataset column, plus one
- * group key per declared slot of every converter step before it (usually
- * one key per step; more than one only when that step's scope mixed
- * column types). Passing no `uptoStep` includes every configured step
- * (used once a sequence is final and being displayed, e.g. in
- * SelectColumnsStep, where every step is already "before" the
- * column-selection step that comes after all of them).
- *
- * `convertersMeta` (registry name -> component, e.g. from getComponents)
- * is optional: when supplied, option labels use each step's disambiguated
- * display name (see buildStepDisplayNames) instead of its raw registry
- * name.
- */
-export function buildColumnKeysAndTypes({
-  datasetTypes,
-  preprocessing,
-  uptoStep,
-  convertersMeta = {},
-}) {
-  const steps = preprocessing || [];
-  const limit = uptoStep === undefined ? steps.length : uptoStep;
-  const displayNames = buildStepDisplayNames(steps, convertersMeta);
-
-  const columnTypes = { ...datasetTypes };
-  const optionLabels = {};
-  const allKeys = Object.keys(datasetTypes || {});
-
-  for (let index = 0; index < limit; index += 1) {
-    const step = steps[index];
-    const name = displayNames[index];
-    stepOutputSlots(step).forEach(({ slot, type, dtype }) => {
-      const key = groupKey(index, slot);
-      columnTypes[key] = { type: type || null, dtype: dtype || null };
-      optionLabels[key] = slot
-        ? `${name}: output (${slot})`
-        : `${name}: output`;
-      allKeys.push(key);
-    });
-  }
-
-  return { allKeys, columnTypes, optionLabels };
-}
-
-/**
  * Every RAW dataset column name needed to compute a list of ColumnRef,
  * walking group refs back to their step's own scope recursively (a group
  * ref's step may itself reference an earlier group, chained arbitrarily
- * deep). This is what a caller must actually supply values for — e.g.
+ * deep). This is what a caller must actually supply values for, e.g.
  * manual prediction, where the backend only ever accepts real dataset
  * columns as input (see BaseTask.process_manual_input), never a
  * converter's resolved output name like "pca_1": it runs the raw values

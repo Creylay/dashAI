@@ -307,29 +307,12 @@ async def validate_columns(
                     ),
                 }
     elif group_refs:
-        declared_types = params.converter_output_types or {}
-        task_metadata = task.get_metadata()
-        allowed_input_types = set(task_metadata.get("inputs_types", []))
-        for ref in group_refs:
-            # A step with a heterogeneous scope (see SessionPreprocessor.
-            # _classify_by_type) can declare more than one type, one per
-            # slot — "{step}:{slot}" disambiguates which one a slotted ref
-            # means; an unslotted ref (the whole step) keeps the plain
-            # "{step}" key, unchanged from before slots existed.
-            key = str(ref.step) if ref.slot is None else f"{ref.step}:{ref.slot}"
-            declared_type = declared_types.get(key)
-            type_ok = declared_type is not None and _type_allowed(
-                declared_type, allowed_input_types
-            )
-            if allowed_input_types and not type_ok:
-                return {
-                    "dataset_status": "invalid",
-                    "error": (
-                        f"Converter step {ref.step} declares output type "
-                        f"'{declared_type}', which is not one of the task's "
-                        f"allowed input types {sorted(allowed_input_types)}."
-                    ),
-                }
+        # A ref to a converter's output only has a type through the chain's
+        # estimated structure, which needs the preprocessing steps.
+        return {
+            "dataset_status": "invalid",
+            "error": "References to converter outputs need the preprocessing steps.",
+        }
 
     validation_response = {}
 
