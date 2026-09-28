@@ -6,7 +6,7 @@ from DashAI.back.core.schema_fields import enum_field
 from DashAI.back.core.schema_fields.base_schema import BaseSchema
 from DashAI.back.core.schema_fields.schema_field import schema_field
 from DashAI.back.core.utils import MultilingualString
-from DashAI.back.models.RAG.embeddings.dense_embedding import DenseEmbedding
+from DashAI.back.models.RAG.embeddings.base_dense_embedding import BaseDenseEmbedding
 from DashAI.back.models.RAG.exceptions import RAGEmbeddingEmptyInputError
 
 
@@ -31,7 +31,7 @@ class FastTextEmbeddingSchema(BaseSchema):
     )  # type: ignore
 
 
-class FastTextEmbedding(DenseEmbedding):
+class FastTextEmbedding(BaseDenseEmbedding):
     """Dense embeddings using FastText word vectors with mean or max pooling.
 
     Downloads the model binary from the HuggingFace Hub and aggregates

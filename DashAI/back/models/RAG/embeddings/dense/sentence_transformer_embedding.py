@@ -7,6 +7,7 @@ from DashAI.back.core.schema_fields import (
     schema_field,
 )
 from DashAI.back.core.utils import MultilingualString
+from DashAI.back.models.RAG.embeddings.base_dense_embedding import BaseDenseEmbedding
 from DashAI.back.models.RAG.embeddings.dense._overflow_handler import (
     AGGREGATE,
     TRUNCATE,
@@ -14,7 +15,6 @@ from DashAI.back.models.RAG.embeddings.dense._overflow_handler import (
 from DashAI.back.models.RAG.embeddings.dense._sentence_transformer_embedding import (
     _SentenceTransformerEmbedding,
 )
-from DashAI.back.models.RAG.embeddings.dense_embedding import DenseEmbedding
 
 ST_MODELS: Dict[str, dict] = {
     "microsoft/harrier-oss-v1-270m": {
@@ -378,7 +378,7 @@ class SentenceTransformerEmbeddingSchema(BaseSchema):
     )  # type: ignore
 
 
-class SentenceTransformerEmbedding(DenseEmbedding):
+class SentenceTransformerEmbedding(BaseDenseEmbedding):
     """Dense embeddings using Sentence Transformer models.
 
     Wraps :class:`_SentenceTransformerEmbedding` and exposes it as a

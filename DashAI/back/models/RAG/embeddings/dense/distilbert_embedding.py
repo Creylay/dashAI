@@ -6,6 +6,7 @@ from DashAI.back.core.schema_fields import (
     schema_field,
 )
 from DashAI.back.core.utils import MultilingualString
+from DashAI.back.models.RAG.embeddings.base_dense_embedding import BaseDenseEmbedding
 from DashAI.back.models.RAG.embeddings.dense._bert_embedding import (
     CLS,
     CONCAT_2,
@@ -19,7 +20,6 @@ from DashAI.back.models.RAG.embeddings.dense._overflow_handler import (
     AGGREGATE,
     TRUNCATE,
 )
-from DashAI.back.models.RAG.embeddings.dense_embedding import DenseEmbedding
 
 DISTILBERT_POOLING_STRATEGIES = [CLS, MEAN, MAX, CONCAT_2, CONCAT_3, CONCAT_4]
 
@@ -155,7 +155,7 @@ class DistilBERTEmbeddingSchema(BaseSchema):
     )  # type: ignore
 
 
-class DistilBERTEmbedding(DenseEmbedding):
+class DistilBERTEmbedding(BaseDenseEmbedding):
     """Dense embeddings using DistilBERT models with configurable pooling.
 
     Wraps :class:`_BERTEmbedding` (reusing BERT pooling logic) and exposes

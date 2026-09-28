@@ -6,12 +6,12 @@ from DashAI.back.core.schema_fields import (
     schema_field,
 )
 from DashAI.back.core.utils import MultilingualString
+from DashAI.back.models.RAG.embeddings.base_dense_embedding import BaseDenseEmbedding
 from DashAI.back.models.RAG.embeddings.dense._e5_embedding import _E5Embedding
 from DashAI.back.models.RAG.embeddings.dense._overflow_handler import (
     AGGREGATE,
     TRUNCATE,
 )
-from DashAI.back.models.RAG.embeddings.dense_embedding import DenseEmbedding
 
 E5_MODELS: Dict[str, dict] = {
     "intfloat/e5-small-v2": {
@@ -233,7 +233,7 @@ class E5EmbeddingSchema(BaseSchema):
     )  # type: ignore
 
 
-class E5Embedding(DenseEmbedding):
+class E5Embedding(BaseDenseEmbedding):
     """Dense embeddings using E5 models with average pooling + L2 normalization.
 
     Automatically prepends ``"query: "`` or ``"passage: "`` prefixes to
