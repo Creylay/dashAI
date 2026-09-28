@@ -382,6 +382,57 @@ def test_the_search_is_handed_the_units_own_objective(tmp_path):
         del di["config"]
 
 
+class _SlotSkippingOptimizer(_RecordingOptimizer):
+    """An optimizer with no contour to draw: fewer than two numeric axes."""
+
+    def create_plots(self, trials, run_id, n_params, goal_metric, artifact_prefix):
+        tag = artifact_prefix if artifact_prefix is not None else run_id
+        return (
+            [
+                f"history_objective_plot_{tag}.pickle",
+                f"slice_plot_{tag}.pickle",
+                f"contour_plot_{tag}.pickle",
+                f"importance_plot_{tag}.pickle",
+            ],
+            ["history", "slice", None, "importance"],
+        )
+
+
+def test_a_plot_the_optimizer_skipped_keeps_its_slot(tmp_path):
+    """A None in the plot list stays a None in the paths, at the same index.
+
+    The caller writes the paths into four fixed columns of the run, by
+    position, so a skipped contour plot has to leave the third slot empty
+    rather than let the importance plot slide into it. Nor may it be
+    normalized: ``normalize_artifacts`` stringifies anything it does not
+    recognise, so the slot would otherwise point at a pickle of the text
+    "None", a file that exists and that the missing-plot 404 never sees.
+    """
+    import pathlib
+
+    registry = {
+        "SlotSkippingOptimizer": {"class": _SlotSkippingOptimizer},
+        "Accuracy": {"class": _NamedMetric, "metadata": {"maximize": True}},
+    }
+    di["component_registry"] = registry
+    di["config"] = {"RUNS_PATH": str(tmp_path)}
+    try:
+        ctx = _fit_context(_RecordingModel(), _HOLDOUT, _HOLDOUT)
+        ctx.put("optimizable_parameters", [("obj", "C", (0, 1), "number")])
+        ctx.put("factory", _Factory)
+
+        _unit(optimizer_name="SlotSkippingOptimizer", artifact_prefix="7")(ctx)
+
+        paths = ctx.require("plot_paths")
+        assert [path is None for path in paths] == [False, False, True, False]
+        assert paths[3].endswith("importance_plot_7.pickle")
+        assert all(pathlib.Path(path).is_file() for path in paths if path)
+        assert not (tmp_path / "contour_plot_7.pickle").exists()
+    finally:
+        del di["component_registry"]
+        del di["config"]
+
+
 def test_a_run_with_no_optimizer_fits_once_even_if_a_parameter_is_optimizable():
     """Both halves are needed to call something a search: a tuner and a target.
 
