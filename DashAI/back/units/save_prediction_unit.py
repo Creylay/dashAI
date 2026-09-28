@@ -9,6 +9,7 @@ from DashAI.back.core.schema_fields import (
     string_field,
 )
 from DashAI.back.core.utils import MultilingualString
+from DashAI.back.job.base_job import JobError
 from DashAI.back.units.base_unit import BaseUnit
 from DashAI.back.units.context import ExecutionContext
 
@@ -25,6 +26,31 @@ def _columns_field(alias: MultilingualString, description: MultilingualString):
 
 
 class SavePredictionSchema(BaseSchema):
+    task_name: schema_field(
+        string_field(),
+        placeholder="TabularClassificationTask",
+        description=MultilingualString(
+            en="Name of the task the model was trained for. It decides the "
+            "declared type of the predicted column: a regression predicts "
+            "continuous values whatever type its target was trained as.",
+            es="Nombre de la tarea para la que se entrenó el modelo. Decide el "
+            "tipo declarado de la columna predicha: una regresión predice "
+            "valores continuos sin importar el tipo con que se entrenó su "
+            "objetivo.",
+            pt="Nome da tarefa para a qual o modelo foi treinado. Decide o tipo "
+            "declarado da coluna prevista: uma regressão prevê valores "
+            "contínuos seja qual for o tipo com que o seu alvo foi treinado.",
+            de="Name der Aufgabe, für die das Modell trainiert wurde. Sie "
+            "bestimmt den deklarierten Typ der vorhergesagten Spalte: eine "
+            "Regression sagt stetige Werte voraus, gleich mit welchem Typ ihr "
+            "Ziel trainiert wurde.",
+            zh="模型所训练任务的名称。它决定预测列的声明类型：回归预测连续值，"
+            "无论其目标以何种类型训练。",
+        ),
+        alias=MultilingualString(
+            en="Task", es="Tarea", pt="Tarefa", de="Aufgabe", zh="任务"
+        ),
+    )  # type: ignore
     input_columns: _columns_field(
         alias=MultilingualString(
             en="Input columns",
@@ -82,6 +108,13 @@ class SavePredictionUnit(BaseUnit):
     right now, at the top of this method. Publishing a column list earlier
     would go stale the moment anything upstream renamed, added or dropped a
     column.
+
+    The task is configuration, the same way ``PredictUnit`` receives it, and
+    it is consulted for one thing: a regression predicts continuous values
+    whatever type its target was trained as, so the predicted column is
+    declared as a float rather than inheriting the training dataset's type.
+    Inheriting it is not harmless: an integer-typed target makes the save cast
+    ``1.5`` to ``int64``, and Arrow refuses the truncation.
     """
 
     SCHEMA = SavePredictionSchema
@@ -128,6 +161,14 @@ class SavePredictionUnit(BaseUnit):
             if name in input_columns + self.config["output_columns"]
         }
 
+        # Regression models predict continuous values regardless of the
+        # training target's original dtype (a target column that happened to
+        # hold only integer-looking values, say), so the output column's saved
+        # schema must reflect that instead of inheriting the training
+        # dataset's type.
+        if self._predicts_continuous_values():
+            filtered_schema[output_col] = {"type": "Float", "dtype": "float64"}
+
         # Store num of rows, columns, and column names
         dataset_with_prediction.compute_base_metadata()
 
@@ -138,3 +179,23 @@ class SavePredictionUnit(BaseUnit):
         )
 
         ctx.put_ref("results_path", str(full_path))
+
+    def _predicts_continuous_values(self) -> bool:
+        """Whether the configured task is a regression, by its class.
+
+        Resolved from the registry by name rather than instantiated: nothing
+        here calls the task, so its class is all that is needed, and the check
+        is the same subclass test ``isinstance`` would make on an instance.
+        """
+        from kink import di
+
+        from DashAI.back.tasks.regression_task import RegressionTask
+
+        task_name = self.config["task_name"]
+        try:
+            task_class = di["component_registry"][task_name]["class"]
+        except Exception as e:
+            log.exception(e)
+            raise JobError(f"Task {task_name} not found in the registry") from e
+
+        return issubclass(task_class, RegressionTask)

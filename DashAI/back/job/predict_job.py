@@ -486,6 +486,7 @@ class PredictJob(BaseJob):
             # Save Predictions to Arrow file
             try:
                 SavePredictionUnit(
+                    task_name=model_session.task_name,
                     input_columns=model_session.input_columns,
                     output_columns=model_session.output_columns,
                 )(ctx)

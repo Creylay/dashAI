@@ -346,7 +346,11 @@ def test_predict_without_a_training_dataset_is_rejected_before_it_starts(registr
 
 
 def _save_unit(**overrides):
-    config = {"input_columns": ["a"], "output_columns": ["target"]}
+    config = {
+        "task_name": "RecordingTask",
+        "input_columns": ["a"],
+        "output_columns": ["target"],
+    }
     config.update(overrides)
     return SavePredictionUnit(**config)
 
@@ -421,3 +425,77 @@ def test_the_published_results_path_is_a_plain_string(
     _save_unit()(ctx)
 
     assert isinstance(ctx.to_dict()["results_path"], str)
+
+
+# --- SavePredictionUnit: the type of the predicted column --------------------
+
+
+@pytest.fixture(name="regression_registry")
+def fixture_regression_registry(registry):
+    from DashAI.back.tasks.regression_task import RegressionTask
+
+    # Built here rather than at module level: the task modules are light, but
+    # the double only means anything next to the registry it is put in.
+    regression = type("RecordingRegressionTask", (RegressionTask,), {})
+    registry["RecordingRegressionTask"] = {"class": regression}
+    return registry
+
+
+def _integer_target_context(tmp_path):
+    """A training dataset whose target is integer typed, and float predictions.
+
+    The shape of the failure: the target was trained as ``int64``, the model
+    predicts ``1.5``, and the saved schema inherits the training type.
+    """
+    root = tmp_path / "training-integer-target"
+    save_dataset(
+        _dataset(a=[1, 2, 3], b=[4, 5, 6], target=[7, 8, 9]), str(root / "dataset")
+    )
+    ctx = ExecutionContext()
+    ctx.put("dataset", _dataset(a=[1, 2], b=[3, 4]))
+    LoadTrainingDatasetUnit(train_dataset_file_path=str(root))(ctx)
+    ctx.put("y_pred", [1.5, 2.5])
+    return ctx
+
+
+def test_a_regression_saves_its_predicted_column_as_float(
+    regression_registry, tmp_path, datasets_path
+):
+    """Regression: an integer-typed target made the save refuse the cast.
+
+    A regression predicts continuous values whatever type its target was
+    trained as. Inheriting the training type declared the predicted column
+    ``int64``, and Arrow refused to truncate ``1.5`` into it, so every
+    prediction of such a run ended in error. v0.10.0 overrode the type for
+    regression tasks; the unit lost it when the job was decomposed.
+    """
+    ctx = _integer_target_context(tmp_path)
+
+    _save_unit(task_name="RecordingRegressionTask")(ctx)
+
+    saved = load_dataset(str(Path(ctx.require("results_path")) / "dataset"))
+    assert saved["target"] == [1.5, 2.5]
+    assert saved.types["target"].to_string() == {"type": "Float", "dtype": "float64"}
+
+
+def test_any_other_task_keeps_the_type_its_target_was_trained_as(
+    registry, tmp_path, datasets_path
+):
+    """The override is scoped to regression: a classifier's labels keep theirs."""
+    ctx = _integer_target_context(tmp_path)
+    ctx.put("y_pred", [1, 2])
+
+    _save_unit(task_name="RecordingTask")(ctx)
+
+    saved = load_dataset(str(Path(ctx.require("results_path")) / "dataset"))
+    assert saved["target"] == [1, 2]
+    assert saved.types["target"].to_string() == {"type": "Integer", "dtype": "int64"}
+
+
+def test_save_reports_a_task_missing_from_the_registry(
+    registry, tmp_path, datasets_path
+):
+    ctx = _integer_target_context(tmp_path)
+
+    with pytest.raises(JobError, match="Task NoSuchTask not found in the registry"):
+        _save_unit(task_name="NoSuchTask")(ctx)

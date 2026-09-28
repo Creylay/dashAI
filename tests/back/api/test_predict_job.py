@@ -37,6 +37,7 @@ from DashAI.back.dependencies.database.models import (
     Run,
 )
 from DashAI.back.job.base_job import JobError
+from DashAI.back.job.dataset_job import DatasetJob
 from DashAI.back.job.model_job import ModelJob
 from DashAI.back.job.predict_job import PredictJob
 
@@ -286,6 +287,142 @@ def test_neither_a_dataset_nor_manual_input_is_rejected(client, trained_run_id):
         PredictJob(prediction_id=prediction_id).run()
 
     assert _stored_prediction(client, prediction_id)["status"] == PredictionStatus.ERROR
+
+
+# --------------------------------------------------------------------------- #
+# A regression whose target was trained as an integer
+# --------------------------------------------------------------------------- #
+
+REGRESSION_INPUTS = ["x1", "x2"]
+REGRESSION_TARGET = "y"
+REGRESSION_ROWS = 60
+
+
+@pytest.fixture(scope="module", name="integer_target_dataset")
+def create_integer_target_dataset(client: TestClient, tmp_path_factory):
+    """A small regression dataset whose target column is integer typed.
+
+    Written here rather than shipped as a file: the point is the declared type
+    of the target, and the schema handed to the dataset job is where that is
+    decided.
+    """
+    import random
+
+    rng = random.Random(858)
+    folder = tmp_path_factory.mktemp("integer-target")
+    csv_path = folder / "integer_target.csv"
+    lines = [",".join(REGRESSION_INPUTS + [REGRESSION_TARGET])]
+    for _ in range(REGRESSION_ROWS):
+        x1, x2 = rng.uniform(0, 10), rng.uniform(0, 10)
+        lines.append(f"{x1:.4f},{x2:.4f},{round(3 * x1 + 2 * x2)}")
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    session_factory = client.app.container["session_factory"]
+    with session_factory() as db:
+        row = Dataset(name="integer_target", file_path="")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+        kwargs = {
+            "dataset_id": row.id,
+            "url": "",
+            "params": {
+                "dataloader": "CSVDataLoader",
+                "separator": ",",
+                "name": row.name,
+                "schema": {
+                    "x1": {"type": "Float", "dtype": "float64"},
+                    "x2": {"type": "Float", "dtype": "float64"},
+                    REGRESSION_TARGET: {"type": "Integer", "dtype": "int64"},
+                },
+            },
+            "file_path": csv_path,
+        }
+        DatasetJob(job_type="DatasetJob", kwargs=kwargs, db=db).run()
+        db.refresh(row)
+        db.expunge(row)
+        return row
+
+
+@pytest.fixture(scope="module", name="regression_run_id")
+def create_regression_run(client: TestClient, integer_target_dataset: Dataset):
+    """A trained regression run on the integer-typed target."""
+    session_factory = client.app.container["session_factory"]
+
+    with session_factory() as db:
+        model_session = ModelSession(
+            dataset_id=integer_target_dataset.id,
+            name="PredictJobRegressionSession",
+            task_name="RegressionTask",
+            input_columns=REGRESSION_INPUTS,
+            output_columns=[REGRESSION_TARGET],
+            train_metrics=[],
+            validation_metrics=[],
+            test_metrics=[],
+            evaluation_strategy="HoldoutEvaluationStrategy",
+            splits=SPLITS,
+        )
+        db.add(model_session)
+        db.commit()
+        db.refresh(model_session)
+
+        run = Run(
+            model_session_id=model_session.id,
+            optimizer_name="OptunaOptimizer",
+            optimizer_parameters={
+                "n_trials": 1,
+                "sampler": "TPESampler",
+                "pruner": "None",
+            },
+            model_name="LinearRegression",
+            parameters={},
+            name="PredictJobRegressionRun",
+            goal_metric="MAE",
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = run.id
+
+    ModelJob(run_id=run_id).run()
+
+    with session_factory() as db:
+        assert db.get(Run, run_id).run_path, "the regression run produced no model"
+    return run_id
+
+
+def test_a_regression_on_an_integer_target_saves_its_predictions_as_float(
+    client, regression_run_id, integer_target_dataset
+):
+    """Regression: the saved schema inherited the target's integer type.
+
+    A regression predicts continuous values whatever type its target was
+    trained as. The save cast the predictions to ``int64`` and Arrow refused
+    to truncate them, so every prediction of such a run ended in error with
+    "Can not save prediction to json file". v0.10.0 declared the predicted
+    column a float for regression tasks; the unit that saves now does too.
+    """
+    prediction_id = _create_prediction(
+        client, regression_run_id, integer_target_dataset.id
+    )
+
+    PredictJob(prediction_id=prediction_id).run()
+
+    stored = _stored_prediction(client, prediction_id)
+    assert stored["status"] == PredictionStatus.FINISHED
+
+    saved = load_dataset(str(Path(stored["results_path"]) / "dataset"))
+    assert saved.column_names == REGRESSION_INPUTS + [REGRESSION_TARGET]
+    assert len(saved) == REGRESSION_ROWS
+    assert saved.types[REGRESSION_TARGET].to_string() == {
+        "type": "Float",
+        "dtype": "float64",
+    }
+    predictions = saved[REGRESSION_TARGET]
+    assert all(isinstance(value, float) for value in predictions)
+    # Continuous values, not integers that happen to be stored as floats.
+    assert any(value != round(value) for value in predictions)
 
 
 # --------------------------------------------------------------------------- #

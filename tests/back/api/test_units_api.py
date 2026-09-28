@@ -117,6 +117,7 @@ def test_unit_schemas_describe_their_configuration(units):
         "output_columns",
     }
     assert set(units["SavePredictionUnit"]["schema"]["properties"]) == {
+        "task_name",
         "input_columns",
         "output_columns",
     }
