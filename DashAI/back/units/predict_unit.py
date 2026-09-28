@@ -81,10 +81,17 @@ class PredictSchema(BaseSchema):
 class PredictUnit(BaseUnit):
     """Predict with a trained model and decode the result into labels.
 
-    The input columns are selected against the dataset the context holds at
-    this moment, never against a column list captured earlier: whatever built
-    that dataset — a load from disk or hand-typed rows — is free to have
-    produced a different shape.
+    The rows come in as ``model_input``, the key
+    :class:`ApplySessionPreprocessingUnit` publishes: the raw rows when the
+    session fitted no preprocessor, the transformed ones when it did. Reading
+    that key rather than ``dataset`` is what lets a session that preprocesses
+    predict on the columns its model was trained on while the raw rows stay
+    untouched for whatever saves the prediction next to them.
+
+    The input columns are selected against that dataset at this moment, never
+    against a column list captured earlier: whatever built it, a load from
+    disk or hand-typed rows, with or without a preprocessor on top, is free to
+    have produced a different shape.
 
     The training dataset is required rather than reloaded because the task
     decodes predicted class indexes against its labels. The model is handed the
@@ -95,7 +102,7 @@ class PredictUnit(BaseUnit):
 
     SCHEMA = PredictSchema
 
-    REQUIRES = ("dataset", "model", "train_dataset")
+    REQUIRES = ("model_input", "model", "train_dataset")
     PROVIDES = ("y_pred",)
 
     def __init__(self, **config) -> None:
@@ -135,11 +142,11 @@ class PredictUnit(BaseUnit):
 
         task = self._resolve_task()
 
-        dataset = ctx.require("dataset")
+        model_input = ctx.require("model_input")
         model = ctx.require("model")
         train_dataset = ctx.require("train_dataset")
 
-        prepared_dataset = dataset.select_columns(self.config["input_columns"])
+        prepared_dataset = model_input.select_columns(self.config["input_columns"])
         y_pred_proba = np.array(model.predict(prepared_dataset))
         y_pred = task.process_predictions(
             train_dataset, y_pred_proba, self.config["output_columns"][0]
