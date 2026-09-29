@@ -368,6 +368,8 @@
     "converter_rejected": "The converter rejects this configuration: {{detail}}",
     "inference_fallback": "The result of this converter cannot be anticipated; its output is shown as one block of unknown size.",
     "count_unknown_bound": "Asks for {{n_components}} components; whether there are enough columns is only known once trained.",
-    "cast_may_skip": "A column that cannot be converted to {{new_type}} keeps its original type."
+    "cast_may_skip": "A column that cannot be converted to {{new_type}} keeps its original type.",
+    "train_only": "Applied to training data only: validation, test and predictions are not modified.",
+    "drops_columns": "Columns outside its scope are dropped: {{columns}}."
   }
 }

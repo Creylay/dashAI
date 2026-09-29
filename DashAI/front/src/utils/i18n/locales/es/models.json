@@ -377,6 +377,8 @@
     "converter_rejected": "El converter rechaza esta configuración: {{detail}}",
     "inference_fallback": "No se puede anticipar el resultado de este converter; su salida se muestra como un bloque de tamaño desconocido.",
     "count_unknown_bound": "Pide {{n_components}} componentes; si alcanzan las columnas se sabe recién al entrenar.",
-    "cast_may_skip": "Una columna que no se pueda convertir a {{new_type}} conserva su tipo original."
+    "cast_may_skip": "Una columna que no se pueda convertir a {{new_type}} conserva su tipo original.",
+    "train_only": "Se aplica solo a los datos de entrenamiento: validación, test y predicciones no se modifican.",
+    "drops_columns": "Se descartan las columnas fuera de su scope: {{columns}}."
   }
 }

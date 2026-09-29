@@ -367,6 +367,8 @@
     "converter_rejected": "转换器拒绝此配置：{{detail}}",
     "inference_fallback": "无法预先确定此转换器的结果；其输出显示为一个大小未知的块。",
     "count_unknown_bound": "要求 {{n_components}} 个成分；列数是否足够要到训练时才能确定。",
-    "cast_may_skip": "无法转换为 {{new_type}} 的列会保留其原始类型。"
+    "cast_may_skip": "无法转换为 {{new_type}} 的列会保留其原始类型。",
+    "train_only": "仅应用于训练数据：验证集、测试集和预测不会被修改。",
+    "drops_columns": "其作用范围之外的列将被删除：{{columns}}。"
   }
 }
