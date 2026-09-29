@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from DashAI.back.converters.base_converter import BaseConverter
 from DashAI.back.dataloaders.classes.dashai_dataset import (
@@ -572,3 +573,100 @@ def test_a_renamed_new_column_is_recorded_under_its_final_name():
     assert resolved == {0: ["derived_1"]}
     assert transformed["train"].to_pandas()["derived_1"].tolist() == [10, 20]
     assert preprocessor.resolved_slots == {0: {"Integer": ["derived_1"]}}
+
+
+class _DuplicatingSampler(BaseConverter):
+    """A training-only resampler that simply duplicates every row."""
+
+    SCHEMA = None
+    metadata = {"allowed_types": [Integer], "allowed_dtypes": []}
+    CHANGES_ROW_COUNT = True
+    COLUMN_OPERATION = "rows"
+    ROWS_APPLY_TO = "train"
+    SUPERVISED = True
+    PRESERVES_INPUT_TYPE = True
+
+    def get_output_type(self, column_name=None):
+        import pyarrow as pa
+
+        return Integer(arrow_type=pa.int64())
+
+    def fit(self, x, y=None):
+        frame = pd.concat([x.to_pandas(), y.to_pandas()], axis=1)
+        self._table = pd.concat([frame, frame], ignore_index=True)
+        self._types = {**x.types, **y.types}
+        return self
+
+    def transform(self, x, y=None):
+        return to_dashai_dataset(self._table, types=self._types)
+
+
+_SAMPLER_SCHEMA = {
+    "age": {"type": "Integer", "dtype": "int64"},
+    "other": {"type": "Integer", "dtype": "int64"},
+    "label": {"type": "Integer", "dtype": "int64"},
+}
+
+
+def _sampler_preprocessor(target_columns=("label",)):
+    registry = _FakeRegistry({"Sampler": _DuplicatingSampler})
+    sequence = ConverterSequence(
+        steps=[
+            ConverterStep(
+                converter="Sampler", params={}, scope=[RawColumnRef(name="age")]
+            )
+        ]
+    )
+    return SessionPreprocessor(sequence, registry, target_columns=list(target_columns))
+
+
+def _sampler_split():
+    columns = {"age": [1, 2], "other": [5, 6], "label": [0, 1]}
+    return {
+        "train": _dataset(columns, _SAMPLER_SCHEMA),
+        "test": _dataset(columns, _SAMPLER_SCHEMA),
+    }
+
+
+def test_a_resampler_only_changes_the_training_rows():
+    preprocessor = _sampler_preprocessor()
+
+    transformed, resolved = preprocessor.fit_transform(_sampler_split())
+
+    train = transformed["train"].to_pandas()
+    assert list(train.columns) == ["age", "label"]
+    assert train["age"].tolist() == [1, 2, 1, 2]
+    assert train["label"].tolist() == [0, 1, 0, 1]
+    test = transformed["test"].to_pandas()
+    assert list(test.columns) == ["age", "label"]
+    assert test["age"].tolist() == [1, 2]
+    assert resolved == {0: ["age"]}
+
+
+def test_replaying_the_chain_resamples_the_training_split_again():
+    preprocessor = _sampler_preprocessor()
+    preprocessor.fit_transform(_sampler_split())
+
+    replayed = preprocessor.transform_only(_sampler_split())
+
+    assert replayed["train"].num_rows == 4
+    assert replayed["test"].num_rows == 2
+
+
+def test_prediction_inputs_are_never_resampled():
+    preprocessor = _sampler_preprocessor()
+    preprocessor.fit_transform(_sampler_split())
+    manual_input = _dataset(
+        {"age": [7], "other": [8]},
+        {key: _SAMPLER_SCHEMA[key] for key in ("age", "other")},
+    )
+
+    predicted = preprocessor.transform_dataset(manual_input)
+
+    assert predicted.num_rows == 1
+    assert predicted.column_names == ["age"]
+
+
+def test_a_resampler_without_a_single_target_column_fails_clearly():
+    with pytest.raises(ValueError, match="one target column"):
+        _sampler_preprocessor(target_columns=()).fit_transform(_sampler_split())

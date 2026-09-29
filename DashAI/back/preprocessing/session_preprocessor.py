@@ -20,6 +20,14 @@ if TYPE_CHECKING:
     from DashAI.back.dataloaders.classes.dashai_dataset import DashAIDataset
 
 
+def _is_train_only(converter: Any) -> bool:
+    """Whether a converter changes rows on the training split only."""
+    converter_class = type(converter)
+    return bool(converter_class.CHANGES_ROW_COUNT) and (
+        getattr(converter_class, "ROWS_APPLY_TO", None) == "train"
+    )
+
+
 class SessionPreprocessor:
     """Fits and applies converters from a ConverterSequence.
 
@@ -131,6 +139,45 @@ class SessionPreprocessor:
             ).items()
         }
 
+    def _apply_train_only_step(
+        self,
+        converter: Any,
+        current: Dict[str, "DashAIDataset"],
+        scope_names: List[str],
+    ) -> Dict[str, "DashAIDataset"]:
+        """Resample the train split; keep every other split's rows as they are.
+
+        The converter is fit on the train split it receives, every time: a
+        resampler learns nothing to apply to other data, it produces new
+        training rows. Every split keeps only the step's scope and the
+        target, as the resampler's own output does, so all splits share the
+        same columns. A split without the target (a prediction input) keeps
+        just the scope.
+        """
+        target_columns = list(getattr(self, "target_columns", None) or [])
+        if len(target_columns) != 1:
+            raise ValueError(
+                f"{type(converter).__name__} needs exactly one target column "
+                f"to resample, got {len(target_columns)}."
+            )
+        new_current = {}
+        for split_name, dataset in current.items():
+            has_target = all(c in dataset.column_names for c in target_columns)
+            if split_name != "train":
+                keep = scope_names + (target_columns if has_target else [])
+                new_current[split_name] = dataset.select_columns(keep)
+                continue
+            if not has_target:
+                raise ValueError(
+                    f"{type(converter).__name__} needs the target column "
+                    f"'{target_columns[0]}' in the training split."
+                )
+            scoped = dataset.select_columns(scope_names)
+            target = dataset.select_columns(target_columns)
+            converter.fit(scoped, target)
+            new_current["train"] = converter.transform(scoped, target)
+        return new_current
+
     @staticmethod
     def _transform_split(converter, dataset, scope_names, train_transformed):
         """Transform one split's scoped columns, without crashing on 0 rows.
@@ -193,6 +240,17 @@ class SessionPreprocessor:
             )
             converter = self._instantiate(step)
 
+            if _is_train_only(converter):
+                current = self._apply_train_only_step(converter, current, scope_names)
+                # The step's output columns are its scope columns; the target
+                # the resampler returns alongside them is not a column of its.
+                self.resolved_columns[index] = list(scope_names)
+                self.resolved_slots[index] = self._classify_by_type(
+                    converter, scope_names
+                )
+                self.fitted_converters.append(converter)
+                continue
+
             train_scope = current["train"].select_columns(scope_names)
             converter = self._fit(converter, current["train"], train_scope)
 
@@ -249,6 +307,10 @@ class SessionPreprocessor:
                 self.resolved_slots,
             )
 
+            if _is_train_only(converter):
+                current = self._apply_train_only_step(converter, current, scope_names)
+                continue
+
             train_transformed = None
             if "train" in current:
                 train_transformed = converter.transform(
@@ -281,8 +343,12 @@ class SessionPreprocessor:
         return current
 
     def transform_dataset(self, dataset: "DashAIDataset") -> "DashAIDataset":
-        """Convenience wrapper for a single dataset (predict/explain use)."""
-        return self.transform_only({"train": dataset})["train"]
+        """Transform a single dataset (predict/explain use).
+
+        Wrapped under its own "predict" key, never "train", so training-only
+        steps (resampling) leave its rows untouched.
+        """
+        return self.transform_only({"predict": dataset})["predict"]
 
 
 def load_final_preprocessor(model_session: Any) -> "SessionPreprocessor":
