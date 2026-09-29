@@ -80,6 +80,11 @@ class BaseConverter(ConfigObject, ABC):
     # None (e.g. an older plugin) is treated as "expand" with an unknown
     # column count, which never promises a column that may not exist.
     COLUMN_OPERATION: Optional[str] = None
+    # For a "rows" converter, where it runs in a session's preprocessing:
+    # "train" means only on the training split, never on validation, test
+    # or prediction inputs (resampling). None means sessions do not support
+    # it yet.
+    ROWS_APPLY_TO: Optional[str] = None
     SCHEMA: BaseConverterSchema
 
     @classmethod
@@ -115,6 +120,7 @@ class BaseConverter(ConfigObject, ABC):
         meta["preserves_input_type"] = cls.PRESERVES_INPUT_TYPE
         meta["learns_from_data"] = cls.LEARNS_FROM_DATA
         meta["column_operation"] = cls.COLUMN_OPERATION
+        meta["rows_apply_to"] = cls.ROWS_APPLY_TO
         meta["n_components_features_bounded"] = getattr(
             cls, "N_COMPONENTS_FEATURES_BOUNDED", False
         )
@@ -193,7 +199,9 @@ class BaseConverter(ConfigObject, ABC):
         """
         operation = type(self).COLUMN_OPERATION or "expand"
         if operation == "rows":
-            raise RowsNotSupportedError(type(self).__name__)
+            if type(self).ROWS_APPLY_TO != "train":
+                raise RowsNotSupportedError(type(self).__name__)
+            return StructureDelta(kept=list(inputs), drops_unscoped=True)
         if operation == "replace":
             return StructureDelta(kept=[self._retype(item) for item in inputs])
         if operation == "add":
