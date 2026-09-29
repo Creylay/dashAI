@@ -77,6 +77,7 @@ export default function FormSessionConverterSection({
           handleSaveConverter={handleSaveConverter}
           setStep={setStep}
           hideButtons={hideButtons}
+          warnAboutLeakage={false}
         />
       )}
     </Box>
