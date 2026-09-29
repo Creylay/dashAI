@@ -150,9 +150,39 @@ def _apply_step(
         )
     warnings.extend(delta.warnings)
     warnings.extend(_check_bounds(converter_class, converter, scope))
+    if delta.drops_unscoped:
+        warnings.extend(_drop_warnings(state, scope))
 
     new_state, added = _apply_delta(index, state, scope, delta, taken)
+    if delta.drops_unscoped:
+        # The runtime replaces the dataset with the step's scope plus the
+        # target, so only those names remain taken.
+        scope_names = {item.name for item in scope if isinstance(item, ColumnItem)}
+        taken.intersection_update(scope_names | target)
     return new_state, added, warnings
+
+
+def _drop_warnings(
+    state: List[StateItem], scope: List[StateItem]
+) -> List[StructureMessage]:
+    """Tell the user a step only affects training data and what it drops.
+
+    Used for a step whose output keeps only its scope (a training-only
+    resampler): validation, test and prediction rows are left as they are,
+    and every column outside its scope is gone after it.
+    """
+    warnings = [StructureMessage(code="train_only")]
+    scope_ids = {_identity(item) for item in scope}
+    dropped = [
+        item.name if isinstance(item, ColumnItem) else item.label
+        for item in state
+        if _identity(item) not in scope_ids
+    ]
+    if dropped:
+        warnings.append(
+            StructureMessage(code="drops_columns", params={"columns": dropped})
+        )
+    return warnings
 
 
 def _instantiate(converter_class: Any, params: Dict[str, Any]) -> Any:
@@ -352,7 +382,8 @@ def _apply_delta(
     for item in state:
         item_id = _identity(item)
         if item_id not in scope_ids:
-            new_state.append(item)
+            if not delta.drops_unscoped:
+                new_state.append(item)
         elif item_id in kept:
             new_state.append(kept[item_id])
         elif isinstance(item, ColumnItem):
