@@ -195,6 +195,15 @@ class ExplainerJob(BaseJob):
                 if model_session.preprocessing and model_session.preprocessing.get(
                     "steps"
                 ):
+                    if not model_session.preprocessing_artifacts_path:
+                        # Explaining raw rows with a model fitted on transformed
+                        # ones would be silently wrong; training and prediction
+                        # refuse the same state.
+                        raise JobError(
+                            "This session declares preprocessing steps but has "
+                            "no fitted preprocessor: its preprocessing has not "
+                            "finished or failed."
+                        )
                     preprocessing = {
                         "preprocessing_artifacts_path": (
                             model_session.preprocessing_artifacts_path

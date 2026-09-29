@@ -37,9 +37,19 @@ def _preprocessing_artifacts_path(model_session: ModelSession) -> Optional[str]:
     artifacts path mean anything, so the two are read together and the path
     alone travels to the unit that applies it.
     """
-    if model_session.preprocessing and model_session.preprocessing.get("steps"):
-        return model_session.preprocessing_artifacts_path
-    return None
+    if not (model_session.preprocessing and model_session.preprocessing.get("steps")):
+        return None
+    artifacts_path = model_session.preprocessing_artifacts_path
+    if not artifacts_path:
+        # Without this the rows would silently be predicted raw, which is the
+        # one thing a session with steps must never do. Training refuses the
+        # same state in SplitterScopeMixin; the runs endpoint keeps it out of
+        # reach with a 409, so this is the job's own last line.
+        raise JobError(
+            "This session declares preprocessing steps but has no fitted "
+            "preprocessor: its preprocessing has not finished or failed."
+        )
+    return artifacts_path
 
 
 def _build_preview_rows(
@@ -159,7 +169,12 @@ def run_manual_prediction(
         input_columns = list(model_session.input_columns)
         output_columns = list(model_session.output_columns)
         train_dataset_file_path = dataset_trained.file_path
-        preprocessing_artifacts_path = _preprocessing_artifacts_path(model_session)
+        try:
+            preprocessing_artifacts_path = _preprocessing_artifacts_path(model_session)
+        except JobError as e:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(e)
+            ) from e
 
     ctx = ExecutionContext()
 
@@ -458,6 +473,18 @@ class PredictJob(BaseJob):
                         f"Cannot predict on the {prediction.split} split: {e}"
                     ) from e
 
+            # Resolved ahead of the generic handler below, which would replace
+            # this message with "Model prediction failed".
+            try:
+                preprocessing_artifacts_path = _preprocessing_artifacts_path(
+                    model_session
+                )
+            except JobError as e:
+                prediction.set_status_as_error()
+                db.commit()
+                log.exception(e)
+                raise
+
             try:
                 # Load or create prediction dataset. Both branches publish the
                 # same "dataset" key, so the prediction below cannot tell a
@@ -482,9 +509,7 @@ class PredictJob(BaseJob):
                 # and the model reads the columns it was trained on from what
                 # it publishes. The raw rows stay under "dataset" for the save.
                 ApplySessionPreprocessingUnit(
-                    preprocessing_artifacts_path=_preprocessing_artifacts_path(
-                        model_session
-                    ),
+                    preprocessing_artifacts_path=preprocessing_artifacts_path,
                 )(ctx)
 
                 self.report_progress(0.4, "Running prediction")

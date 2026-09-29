@@ -162,3 +162,53 @@ def test_a_manual_local_explanation_stores_the_transformed_instance(
     assert saved["SepalLengthCm"][0] != pytest.approx(raw_value)
 
     client.delete(f"/api/v1/model-session/{model_session_id}")
+
+
+def test_a_session_with_steps_but_no_artifacts_refuses_to_explain(
+    client: TestClient, dataset_1: Dataset
+):
+    """Steps declared and nothing fitted: explaining raw rows with a model that
+    was fitted on transformed ones would be silently wrong, so the job ends in
+    error with its own message instead."""
+    model_session_id, run_id = _train_session_with_scaler(client, dataset_1.id)
+
+    session_factory = client.app.container["session_factory"]
+    with session_factory() as db:
+        db.get(ModelSession, model_session_id).preprocessing_artifacts_path = None
+        local_explainer = LocalExplainer(
+            name="job_preprocessing_local_explainer_no_artifacts",
+            run_id=run_id,
+            explainer_name="KernelShap",
+            dataset_id=dataset_1.id,
+            scope={"mode": "manual"},
+            parameters={},
+            fit_parameters={
+                "sample_background_data": False,
+                "background_fraction": 0.5,
+                "sampling_method": "shuffle",
+            },
+        )
+        db.add(local_explainer)
+        db.commit()
+        db.refresh(local_explainer)
+        explainer_id = local_explainer.id
+
+    job_response = client.post(
+        "/api/v1/job/",
+        data={
+            "job_type": "ExplainerJob",
+            "kwargs": json.dumps(
+                {
+                    "explainer_id": explainer_id,
+                    "explainer_scope": "local",
+                    "manual_input_data": [{"SepalLengthCm": 3.0}],
+                }
+            ),
+        },
+    )
+    assert job_response.status_code == 201, job_response.text
+    job_status = client.get(f"/api/v1/job/status/{job_response.json()['id']}").json()
+    assert job_status["status"] == "error", job_status
+    assert "no fitted preprocessor" in json.dumps(job_status), job_status
+
+    client.delete(f"/api/v1/model-session/{model_session_id}")

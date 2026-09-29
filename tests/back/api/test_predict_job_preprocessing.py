@@ -31,6 +31,7 @@ from DashAI.back.dependencies.database.models import (
     Prediction,
     Run,
 )
+from DashAI.back.job.base_job import JobError
 from DashAI.back.job.predict_job import PredictJob
 from DashAI.back.preprocessing.session_preprocessor import load_final_preprocessor
 
@@ -299,3 +300,59 @@ def test_the_preview_shows_the_column_the_model_saw(client, dataset_1, fitted):
         rows, str(Path(dataset_1.file_path) / "dataset")
     )
     assert [row[1] for row in body["rows"]] == _expected_labels(fitted, typed_rows)
+
+
+@pytest.fixture(name="session_without_artifacts")
+def forget_the_fitted_artifacts(client: TestClient, fitted):
+    """The fitted session with its artifacts path nulled, restored afterwards.
+
+    That is the state of a session whose preprocessing is still pending or
+    failed: steps declared, nothing fitted. The fixture is module scoped, so
+    the path goes back in a ``finally`` for the tests that run after this one.
+    """
+    session_factory = client.app.container["session_factory"]
+    with session_factory() as db:
+        run = db.get(Run, fitted["run_id"])
+        model_session = db.get(ModelSession, run.model_session_id)
+        artifacts_path = model_session.preprocessing_artifacts_path
+        model_session.preprocessing_artifacts_path = None
+        db.commit()
+    try:
+        yield
+    finally:
+        with session_factory() as db:
+            run = db.get(Run, fitted["run_id"])
+            model_session = db.get(ModelSession, run.model_session_id)
+            model_session.preprocessing_artifacts_path = artifacts_path
+            db.commit()
+
+
+def test_a_session_with_steps_but_no_artifacts_refuses_to_predict(
+    client, dataset_1, fitted, session_without_artifacts
+):
+    """Steps declared and nothing fitted: the rows must not be predicted raw.
+
+    The refusal carries its own message rather than the generic "Model
+    prediction failed", and the prediction ends in error.
+    """
+    prediction_id = _create_prediction(client, fitted["run_id"], dataset_1.id)
+
+    with pytest.raises(JobError, match="no fitted preprocessor"):
+        PredictJob(prediction_id=prediction_id).run()
+
+    assert _stored_prediction(client, prediction_id)["status"] == PredictionStatus.ERROR
+
+
+def test_the_preview_answers_409_while_the_session_has_no_artifacts(
+    client, fitted, session_without_artifacts
+):
+    response = client.post(
+        "/api/v1/predict/preview",
+        data={
+            "run_id": str(fitted["run_id"]),
+            "manual_input_data": json.dumps([{SCOPED_COLUMN: THRESHOLD}]),
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert "no fitted preprocessor" in response.json()["detail"]
