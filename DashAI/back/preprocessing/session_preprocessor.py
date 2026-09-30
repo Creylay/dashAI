@@ -386,6 +386,71 @@ class SessionPreprocessor:
         return self.transform_only({"predict": dataset})["predict"]
 
 
+def transform_by_split(
+    preprocessor: "SessionPreprocessor",
+    dataset: "DashAIDataset",
+    train_indexes: List[int],
+    test_indexes: List[int],
+    val_indexes: List[int],
+) -> Tuple["DashAIDataset", List[int], List[int], List[int]]:
+    """Transform a dataset split by split, and reindex the splits.
+
+    Used by explainers, which need the run's train/test/validation rows
+    after preprocessing. Splitting first and transforming each part keeps
+    the run's indexes valid even when a step removes rows (NanRemover), and
+    the parts' keys are neither "train" nor "predict", so incomplete rows
+    are removed and no synthetic (resampled) rows are added. An empty part
+    is not transformed: it takes the transformed train part's columns with
+    no rows.
+
+    Parameters
+    ----------
+    preprocessor : SessionPreprocessor
+        The fitted preprocessor of the run's session.
+    dataset : DashAIDataset
+        The raw dataset the run was trained on.
+    train_indexes, test_indexes, val_indexes : list of int
+        The run's split indexes over ``dataset``.
+
+    Returns
+    -------
+    tuple
+        (dataset, train_indexes, test_indexes, val_indexes): the transformed
+        parts concatenated in train, test, validation order, and each
+        part's positions in it.
+    """
+    import pyarrow as pa
+
+    from DashAI.back.dataloaders.classes.dashai_dataset import (
+        DashAIDataset,
+        split_dataset,
+    )
+
+    parts = split_dataset(
+        dataset,
+        train_indexes=train_indexes,
+        test_indexes=test_indexes,
+        val_indexes=val_indexes,
+    )
+    names = ["train", "test", "validation"]
+    non_empty = {
+        f"explain_{name}": parts[name] for name in names if parts[name].num_rows > 0
+    }
+    transformed = preprocessor.transform_only(non_empty)
+    template = transformed["explain_train"]
+    ordered = [
+        transformed.get(f"explain_{name}", template.select([])) for name in names
+    ]
+    table = pa.concat_tables([part.arrow_table for part in ordered])
+    merged = DashAIDataset(table, types=template.types)
+
+    offsets, start = [], 0
+    for part in ordered:
+        offsets.append(list(range(start, start + part.num_rows)))
+        start += part.num_rows
+    return merged, offsets[0], offsets[1], offsets[2]
+
+
 def load_final_preprocessor(model_session: Any) -> "SessionPreprocessor":
     """Load the SessionPreprocessor fitted on the session's full training pool.
 

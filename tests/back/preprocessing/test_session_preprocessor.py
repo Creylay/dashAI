@@ -742,3 +742,18 @@ def test_nan_remover_leaving_a_split_empty_fails_clearly():
 
     with pytest.raises(ValueError, match="every row of the 'test' split"):
         _nan_preprocessor().fit_transform(split)
+
+
+def test_transform_by_split_removes_rows_per_split_and_reindexes():
+    from DashAI.back.preprocessing.session_preprocessor import transform_by_split
+
+    preprocessor = _nan_preprocessor()
+    preprocessor.fit_transform({"train": _nan_dataset([1, 2], [0, 1])})
+    raw = _nan_dataset([1, None, 3, 4, None], [0, 1, 0, 1, 1])
+
+    dataset, train_idx, test_idx, val_idx = transform_by_split(
+        preprocessor, raw, [0, 1, 2], [3, 4], []
+    )
+
+    assert dataset.to_pandas()["age"].tolist() == [1, 3, 4]
+    assert (train_idx, test_idx, val_idx) == ([0, 1], [2], [])
