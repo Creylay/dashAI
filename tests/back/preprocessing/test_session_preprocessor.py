@@ -670,3 +670,75 @@ def test_prediction_inputs_are_never_resampled():
 def test_a_resampler_without_a_single_target_column_fails_clearly():
     with pytest.raises(ValueError, match="one target column"):
         _sampler_preprocessor(target_columns=()).fit_transform(_sampler_split())
+
+
+_NAN_SCHEMA = {
+    "age": {"type": "Integer", "dtype": "int64"},
+    "other": {"type": "Integer", "dtype": "int64"},
+    "label": {"type": "Integer", "dtype": "int64"},
+}
+
+
+def _nan_dataset(ages, labels):
+    return _dataset(
+        {
+            "age": pd.array(ages, dtype="Int64"),
+            "other": list(range(len(ages))),
+            "label": labels,
+        },
+        _NAN_SCHEMA,
+    )
+
+
+def _nan_preprocessor():
+    from DashAI.back.converters.simple_converters.nan_remover import NanRemover
+
+    registry = _FakeRegistry({"NanRemover": NanRemover})
+    sequence = ConverterSequence(
+        steps=[
+            ConverterStep(
+                converter="NanRemover", params={}, scope=[RawColumnRef(name="age")]
+            )
+        ]
+    )
+    return SessionPreprocessor(sequence, registry, target_columns=["label"])
+
+
+def test_nan_remover_removes_incomplete_rows_on_every_split_with_the_target():
+    split = {
+        "train": _nan_dataset([1, None, 3], [0, 1, 0]),
+        "test": _nan_dataset([None, 5], [1, 1]),
+    }
+
+    transformed, resolved = _nan_preprocessor().fit_transform(split)
+
+    train = transformed["train"].to_pandas()
+    assert list(train.columns) == ["age", "label"]
+    assert train["age"].tolist() == [1, 3]
+    assert train["label"].tolist() == [0, 0]
+    assert transformed["test"].to_pandas()["label"].tolist() == [1]
+    assert resolved == {0: ["age"]}
+
+
+def test_nan_remover_never_removes_prediction_rows():
+    preprocessor = _nan_preprocessor()
+    preprocessor.fit_transform({"train": _nan_dataset([1, 2], [0, 1])})
+    manual_input = _dataset(
+        {"age": pd.array([None], dtype="Int64"), "other": [8]},
+        {key: _NAN_SCHEMA[key] for key in ("age", "other")},
+    )
+
+    predicted = preprocessor.transform_dataset(manual_input)
+
+    assert predicted.num_rows == 1
+    assert predicted.column_names == ["age"]
+
+
+def test_nan_remover_leaving_a_split_empty_fails_clearly():
+    split = {
+        "train": _nan_dataset([1, 2], [0, 1]),
+        "test": _nan_dataset([None, None], [1, 0]),
+    }
+
+    with pytest.raises(ValueError, match="every row of the 'test' split"):
+        _nan_preprocessor().fit_transform(split)

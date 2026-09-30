@@ -20,12 +20,18 @@ if TYPE_CHECKING:
     from DashAI.back.dataloaders.classes.dashai_dataset import DashAIDataset
 
 
-def _is_train_only(converter: Any) -> bool:
-    """Whether a converter changes rows on the training split only."""
+def _row_rule(converter: Any) -> Optional[str]:
+    """Where a row-changing converter runs in a session, or None.
+
+    "train": only on the training split (resampling). "splits": on every
+    split, never on prediction inputs (row removal). None for converters
+    that keep their rows, or row-changing ones sessions do not support.
+    """
     converter_class = type(converter)
-    return bool(converter_class.CHANGES_ROW_COUNT) and (
-        getattr(converter_class, "ROWS_APPLY_TO", None) == "train"
-    )
+    if not converter_class.CHANGES_ROW_COUNT:
+        return None
+    rule = getattr(converter_class, "ROWS_APPLY_TO", None)
+    return rule if rule in ("train", "splits") else None
 
 
 class SessionPreprocessor:
@@ -139,43 +145,65 @@ class SessionPreprocessor:
             ).items()
         }
 
-    def _apply_train_only_step(
+    def _apply_row_step(
         self,
         converter: Any,
         current: Dict[str, "DashAIDataset"],
         scope_names: List[str],
+        rule: str,
+        fit: bool,
     ) -> Dict[str, "DashAIDataset"]:
-        """Resample the train split; keep every other split's rows as they are.
+        """Apply a row-changing step to every split, following its rule.
 
-        The converter is fit on the train split it receives, every time: a
-        resampler learns nothing to apply to other data, it produces new
-        training rows. Every split keeps only the step's scope and the
-        target, as the resampler's own output does, so all splits share the
-        same columns. A split without the target (a prediction input) keeps
-        just the scope.
+        Every split keeps only the step's scope and, when present, the
+        target, as the converter's own output does in notebooks, so all
+        splits share the same columns. A prediction input ("predict") never
+        loses or gains rows.
+
+        - "train": the train split is resampled, fitting the converter on it
+          every time (a resampler learns nothing to apply to other data);
+          every other split keeps its rows.
+        - "splits": every split but "predict" keeps only the rows the
+          converter reports with ``rows_to_keep``, cut on the whole split so
+          inputs and target stay aligned. The converter is fit once, on the
+          train split, when ``fit`` is true.
         """
+        name = type(converter).__name__
         target_columns = list(getattr(self, "target_columns", None) or [])
-        if len(target_columns) != 1:
+        if rule == "train" and len(target_columns) != 1:
             raise ValueError(
-                f"{type(converter).__name__} needs exactly one target column "
-                f"to resample, got {len(target_columns)}."
+                f"{name} needs exactly one target column to resample, "
+                f"got {len(target_columns)}."
             )
+        if rule == "splits" and fit and "train" in current:
+            converter.fit(current["train"].select_columns(scope_names))
+
         new_current = {}
         for split_name, dataset in current.items():
-            has_target = all(c in dataset.column_names for c in target_columns)
-            if split_name != "train":
-                keep = scope_names + (target_columns if has_target else [])
+            has_target = bool(target_columns) and all(
+                c in dataset.column_names for c in target_columns
+            )
+            keep = scope_names + (target_columns if has_target else [])
+            if split_name == "predict" or (rule == "train" and split_name != "train"):
                 new_current[split_name] = dataset.select_columns(keep)
                 continue
-            if not has_target:
+            if rule == "train":
+                if not has_target:
+                    raise ValueError(
+                        f"{name} needs the target column '{target_columns[0]}' "
+                        "in the training split."
+                    )
+                scoped = dataset.select_columns(scope_names)
+                target = dataset.select_columns(target_columns)
+                converter.fit(scoped, target)
+                new_current["train"] = converter.transform(scoped, target)
+                continue
+            positions = converter.rows_to_keep(dataset.select_columns(scope_names))
+            if dataset.num_rows > 0 and not positions:
                 raise ValueError(
-                    f"{type(converter).__name__} needs the target column "
-                    f"'{target_columns[0]}' in the training split."
+                    f"{name} removed every row of the '{split_name}' split."
                 )
-            scoped = dataset.select_columns(scope_names)
-            target = dataset.select_columns(target_columns)
-            converter.fit(scoped, target)
-            new_current["train"] = converter.transform(scoped, target)
+            new_current[split_name] = dataset.select(positions).select_columns(keep)
         return new_current
 
     @staticmethod
@@ -240,10 +268,13 @@ class SessionPreprocessor:
             )
             converter = self._instantiate(step)
 
-            if _is_train_only(converter):
-                current = self._apply_train_only_step(converter, current, scope_names)
+            rule = _row_rule(converter)
+            if rule is not None:
+                current = self._apply_row_step(
+                    converter, current, scope_names, rule, fit=True
+                )
                 # The step's output columns are its scope columns; the target
-                # the resampler returns alongside them is not a column of its.
+                # that travels alongside them is not a column of its.
                 self.resolved_columns[index] = list(scope_names)
                 self.resolved_slots[index] = self._classify_by_type(
                     converter, scope_names
@@ -307,8 +338,11 @@ class SessionPreprocessor:
                 self.resolved_slots,
             )
 
-            if _is_train_only(converter):
-                current = self._apply_train_only_step(converter, current, scope_names)
+            rule = _row_rule(converter)
+            if rule is not None:
+                current = self._apply_row_step(
+                    converter, current, scope_names, rule, fit=False
+                )
                 continue
 
             train_transformed = None
@@ -345,8 +379,9 @@ class SessionPreprocessor:
     def transform_dataset(self, dataset: "DashAIDataset") -> "DashAIDataset":
         """Transform a single dataset (predict/explain use).
 
-        Wrapped under its own "predict" key, never "train", so training-only
-        steps (resampling) leave its rows untouched.
+        Wrapped under its own "predict" key, never "train", so no step adds
+        or removes rows of it: neither resampling nor row removal
+        (NanRemover) touches prediction inputs.
         """
         return self.transform_only({"predict": dataset})["predict"]
 
