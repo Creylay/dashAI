@@ -370,6 +370,7 @@
     "count_unknown_bound": "Es werden {{n_components}} Komponenten angefordert; ob genug Spalten vorhanden sind, zeigt sich erst beim Training.",
     "cast_may_skip": "Eine Spalte, die nicht in {{new_type}} umgewandelt werden kann, behält ihren ursprünglichen Typ.",
     "train_only": "Nur auf Trainingsdaten angewendet: Validierung, Test und Vorhersagen werden nicht verändert.",
-    "drops_columns": "Spalten außerhalb seines Geltungsbereichs werden entfernt: {{columns}}."
+    "drops_columns": "Spalten außerhalb seines Geltungsbereichs werden entfernt: {{columns}}.",
+    "rows_removed_in_splits": "Entfernt Zeilen mit fehlenden Werten in Training, Validierung und Test, daher nutzen die Metriken nur vollständige Zeilen. Bei der Vorhersage wird keine Zeile entfernt."
   }
 }

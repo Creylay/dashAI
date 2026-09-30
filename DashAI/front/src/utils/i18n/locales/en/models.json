@@ -370,6 +370,7 @@
     "count_unknown_bound": "Asks for {{n_components}} components; whether there are enough columns is only known once trained.",
     "cast_may_skip": "A column that cannot be converted to {{new_type}} keeps its original type.",
     "train_only": "Applied to training data only: validation, test and predictions are not modified.",
-    "drops_columns": "Columns outside its scope are dropped: {{columns}}."
+    "drops_columns": "Columns outside its scope are dropped: {{columns}}.",
+    "rows_removed_in_splits": "Removes rows with missing values in training, validation and test, so metrics use complete rows only. No row is removed at prediction time."
   }
 }
