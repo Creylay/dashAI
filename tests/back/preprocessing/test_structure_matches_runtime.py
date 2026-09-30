@@ -107,6 +107,7 @@ CASES = [
     ("SMOTEConverter", {"random_state": 0}, ["i_full", "f1"]),
     ("SMOTEENNConverter", {"random_state": 0}, ["i_full", "f1"]),
     ("RandomUnderSamplerConverter", {"random_state": 0}, ["i_full", "f1"]),
+    ("NanRemover", {}, ["i_null", "f_null"]),
 ]
 
 
@@ -173,7 +174,10 @@ def _is_rows(cls):
 
 
 def _unsupported_rows(cls):
-    return _is_rows(cls) and getattr(cls, "ROWS_APPLY_TO", None) != "train"
+    return _is_rows(cls) and getattr(cls, "ROWS_APPLY_TO", None) not in (
+        "train",
+        "splits",
+    )
 
 
 def _dataset():
@@ -243,6 +247,17 @@ def test_estimated_structure_matches_runtime(case):
     else:
         converter.fit(x)
     transformed = converter.transform(x)
+
+    if getattr(cls, "ROWS_APPLY_TO", None) == "splits":
+        # Row removal on every split: the step keeps its scope columns and
+        # exactly the rows with no missing value in them.
+        frame = x.to_pandas()
+        expected = [i for i in range(len(frame)) if not frame.iloc[i].isna().any()]
+        assert converter.rows_to_keep(x) == expected
+        assert list(transformed.column_names) == scope
+        assert [item.name for item in delta.kept] == scope
+        assert delta.drops_unscoped is True
+        return
 
     if delta.drops_unscoped:
         # A training-only resampler keeps its scope columns (only rows change)

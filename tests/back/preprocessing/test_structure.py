@@ -8,6 +8,9 @@ from DashAI.back.converters.simple_converters.date_features import (
     DateFeaturesConverter,
 )
 from DashAI.back.converters.simple_converters.nan_remover import NanRemover
+from DashAI.back.converters.simple_converters.time_resampler import (
+    TimeResamplerConverter,
+)
 from DashAI.back.dataloaders.classes.dashai_dataset import (
     to_dashai_dataset,
     transform_dataset_with_schema,
@@ -21,6 +24,7 @@ from DashAI.back.preprocessing.column_ref import (
 from DashAI.back.preprocessing.session_preprocessor import SessionPreprocessor
 from DashAI.back.preprocessing.structure import infer_structure
 from DashAI.back.preprocessing.structure_types import BlockItem, ColumnItem
+from DashAI.back.splitters.splits_payload import schema_placeholder_defaults
 
 REGISTRY = {
     cls.__name__: {"class": cls}
@@ -31,6 +35,7 @@ REGISTRY = {
         DateFeaturesConverter,
         SMOTEConverter,
         NanRemover,
+        TimeResamplerConverter,
     )
 }
 
@@ -138,7 +143,10 @@ def test_a_scope_type_the_converter_does_not_accept_is_an_error():
 
 
 def test_row_changing_converters_without_a_split_rule_are_not_supported():
-    result = _infer([_step("NanRemover", [RawColumnRef(name="age")])])
+    params = schema_placeholder_defaults(TimeResamplerConverter)
+    result = _infer(
+        [_step("TimeResamplerConverter", [RawColumnRef(name="date")], **params)]
+    )
 
     assert result.steps[0].error.code == "rows_not_supported"
 

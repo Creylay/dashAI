@@ -81,9 +81,11 @@ class BaseConverter(ConfigObject, ABC):
     # column count, which never promises a column that may not exist.
     COLUMN_OPERATION: Optional[str] = None
     # For a "rows" converter, where it runs in a session's preprocessing:
-    # "train" means only on the training split, never on validation, test
-    # or prediction inputs (resampling). None means sessions do not support
-    # it yet.
+    # - "train": only on the training split, never on validation, test or
+    #   prediction inputs (resampling);
+    # - "splits": on train, validation and test, never on prediction inputs
+    #   (row removal; the converter must implement rows_to_keep).
+    # None means sessions do not support it yet.
     ROWS_APPLY_TO: Optional[str] = None
     SCHEMA: BaseConverterSchema
 
@@ -199,7 +201,7 @@ class BaseConverter(ConfigObject, ABC):
         """
         operation = type(self).COLUMN_OPERATION or "expand"
         if operation == "rows":
-            if type(self).ROWS_APPLY_TO != "train":
+            if type(self).ROWS_APPLY_TO not in ("train", "splits"):
                 raise RowsNotSupportedError(type(self).__name__)
             return StructureDelta(kept=list(inputs), drops_unscoped=True)
         if operation == "replace":
@@ -209,6 +211,33 @@ class BaseConverter(ConfigObject, ABC):
         if operation == "select":
             return StructureDelta(added=self._selection_blocks(inputs))
         return StructureDelta(added=self._default_blocks())
+
+    def rows_to_keep(self, x: "DashAIDataset") -> List[int]:
+        """Positions of the rows of x that survive this converter.
+
+        Required for converters with ROWS_APPLY_TO = "splits": the session
+        runtime cuts the whole split (inputs and target together) with these
+        positions instead of taking the converter's own output, so the
+        target never misaligns.
+
+        Parameters
+        ----------
+        x : DashAIDataset
+            The converter's scope columns of one split.
+
+        Returns
+        -------
+        list of int
+            0-based positions of the kept rows, in order.
+
+        Raises
+        ------
+        NotImplementedError
+            For a converter that does not report which rows it keeps.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not report which rows it keeps."
+        )
 
     def _retype(self, item: StateItem) -> StateItem:
         """Copy an item replaced in place with this converter's output type."""
