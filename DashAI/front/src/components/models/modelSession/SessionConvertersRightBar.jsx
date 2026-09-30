@@ -78,8 +78,8 @@ export default function SessionConvertersRightBar({
   const finalState = structure?.final;
 
   const { columnTypes: allColumnTypes } = useMemo(
-    () => stateToOptions(finalState, stepDisplayNames),
-    [finalState, stepDisplayNames],
+    () => stateToOptions(finalState, stepDisplayNames, t),
+    [finalState, stepDisplayNames, t],
   );
 
   const datasetColumns = useMemo(

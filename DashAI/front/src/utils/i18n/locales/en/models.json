@@ -352,8 +352,6 @@
   },
   "structure": {
     "currentState": "Dataset after preprocessing",
-    "columnsCount": "{{count}} columns",
-    "unknownCount": "N columns, known once trained",
     "blocked": "Fix the previous step to check this one.",
     "loadError": "Could not estimate the preprocessing result.",
     "missing_ref": "\"{{ref}}\" does not exist at this point of the chain: an earlier step may have consumed it.",
@@ -371,6 +369,10 @@
     "cast_may_skip": "A column that cannot be converted to {{new_type}} keeps its original type.",
     "train_only": "Applied to training data only: validation, test and predictions are not modified.",
     "drops_columns": "Columns outside its scope are dropped: {{columns}}.",
-    "rows_removed_in_splits": "Removes rows with missing values in training, validation and test, so metrics use complete rows only. No row is removed at prediction time."
+    "rows_removed_in_splits": "Removes rows with missing values in training, validation and test, so metrics use complete rows only. No row is removed at prediction time.",
+    "output": "output",
+    "columns_one": "{{count}} column",
+    "columns_other": "{{count}} columns",
+    "unknownColumns": "N columns"
   }
 }

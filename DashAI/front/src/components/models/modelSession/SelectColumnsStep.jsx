@@ -62,7 +62,7 @@ function SelectColumnsStep({
   });
 
   const stepDisplayNames = buildStepDisplayNames(steps, convertersMeta);
-  const finalOptions = stateToOptions(structure?.final, stepDisplayNames);
+  const finalOptions = stateToOptions(structure?.final, stepDisplayNames, t);
   const inputOptionNames = withPreprocessing
     ? finalOptions.allKeys
     : rawColumnNames;
