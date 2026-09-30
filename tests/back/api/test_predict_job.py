@@ -37,6 +37,7 @@ from DashAI.back.dependencies.database.models import (
     Run,
 )
 from DashAI.back.job.base_job import JobError
+from DashAI.back.job.dataset_job import DatasetJob
 from DashAI.back.job.model_job import ModelJob
 from DashAI.back.job.predict_job import PredictJob
 
@@ -123,13 +124,21 @@ def create_trained_run(client: TestClient, model_session_id: int):
     return run_id
 
 
-def _create_prediction(client, run_id, dataset_id=None):
+def _create_prediction(client, run_id, dataset_id=None, split=None):
     response = client.post(
         "/api/v1/predict/",
-        json={"run_id": run_id, "dataset_id": dataset_id},
+        json={"run_id": run_id, "dataset_id": dataset_id, "split": split},
     )
     assert response.status_code == 200, response.text
     return response.json()["id"]
+
+
+def _run_split_indexes(client, run_id):
+    """The raw ``Run.split_indexes`` payload, decoded when stored as text."""
+    session_factory = client.app.container["session_factory"]
+    with session_factory() as db:
+        payload = db.get(Run, run_id).split_indexes
+    return json.loads(payload) if isinstance(payload, str) else payload
 
 
 def _make_prediction_dataset(client, dataset_1: Dataset):
@@ -278,6 +287,220 @@ def test_neither_a_dataset_nor_manual_input_is_rejected(client, trained_run_id):
         PredictJob(prediction_id=prediction_id).run()
 
     assert _stored_prediction(client, prediction_id)["status"] == PredictionStatus.ERROR
+
+
+# --------------------------------------------------------------------------- #
+# A regression whose target was trained as an integer
+# --------------------------------------------------------------------------- #
+
+REGRESSION_INPUTS = ["x1", "x2"]
+REGRESSION_TARGET = "y"
+REGRESSION_ROWS = 60
+
+
+@pytest.fixture(scope="module", name="integer_target_dataset")
+def create_integer_target_dataset(client: TestClient, tmp_path_factory):
+    """A small regression dataset whose target column is integer typed.
+
+    Written here rather than shipped as a file: the point is the declared type
+    of the target, and the schema handed to the dataset job is where that is
+    decided.
+    """
+    import random
+
+    rng = random.Random(858)
+    folder = tmp_path_factory.mktemp("integer-target")
+    csv_path = folder / "integer_target.csv"
+    lines = [",".join(REGRESSION_INPUTS + [REGRESSION_TARGET])]
+    for _ in range(REGRESSION_ROWS):
+        x1, x2 = rng.uniform(0, 10), rng.uniform(0, 10)
+        lines.append(f"{x1:.4f},{x2:.4f},{round(3 * x1 + 2 * x2)}")
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    session_factory = client.app.container["session_factory"]
+    with session_factory() as db:
+        row = Dataset(name="integer_target", file_path="")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+        kwargs = {
+            "dataset_id": row.id,
+            "url": "",
+            "params": {
+                "dataloader": "CSVDataLoader",
+                "separator": ",",
+                "name": row.name,
+                "schema": {
+                    "x1": {"type": "Float", "dtype": "float64"},
+                    "x2": {"type": "Float", "dtype": "float64"},
+                    REGRESSION_TARGET: {"type": "Integer", "dtype": "int64"},
+                },
+            },
+            "file_path": csv_path,
+        }
+        DatasetJob(job_type="DatasetJob", kwargs=kwargs, db=db).run()
+        db.refresh(row)
+        db.expunge(row)
+        return row
+
+
+@pytest.fixture(scope="module", name="regression_run_id")
+def create_regression_run(client: TestClient, integer_target_dataset: Dataset):
+    """A trained regression run on the integer-typed target."""
+    session_factory = client.app.container["session_factory"]
+
+    with session_factory() as db:
+        model_session = ModelSession(
+            dataset_id=integer_target_dataset.id,
+            name="PredictJobRegressionSession",
+            task_name="RegressionTask",
+            input_columns=REGRESSION_INPUTS,
+            output_columns=[REGRESSION_TARGET],
+            train_metrics=[],
+            validation_metrics=[],
+            test_metrics=[],
+            evaluation_strategy="HoldoutEvaluationStrategy",
+            splits=SPLITS,
+        )
+        db.add(model_session)
+        db.commit()
+        db.refresh(model_session)
+
+        run = Run(
+            model_session_id=model_session.id,
+            optimizer_name="OptunaOptimizer",
+            optimizer_parameters={
+                "n_trials": 1,
+                "sampler": "TPESampler",
+                "pruner": "None",
+            },
+            model_name="LinearRegression",
+            parameters={},
+            name="PredictJobRegressionRun",
+            goal_metric="MAE",
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = run.id
+
+    ModelJob(run_id=run_id).run()
+
+    with session_factory() as db:
+        assert db.get(Run, run_id).run_path, "the regression run produced no model"
+    return run_id
+
+
+def test_a_regression_on_an_integer_target_saves_its_predictions_as_float(
+    client, regression_run_id, integer_target_dataset
+):
+    """Regression: the saved schema inherited the target's integer type.
+
+    A regression predicts continuous values whatever type its target was
+    trained as. The save cast the predictions to ``int64`` and Arrow refused
+    to truncate them, so every prediction of such a run ended in error with
+    "Can not save prediction to json file". v0.10.0 declared the predicted
+    column a float for regression tasks; the unit that saves now does too.
+    """
+    prediction_id = _create_prediction(
+        client, regression_run_id, integer_target_dataset.id
+    )
+
+    PredictJob(prediction_id=prediction_id).run()
+
+    stored = _stored_prediction(client, prediction_id)
+    assert stored["status"] == PredictionStatus.FINISHED
+
+    saved = load_dataset(str(Path(stored["results_path"]) / "dataset"))
+    assert saved.column_names == REGRESSION_INPUTS + [REGRESSION_TARGET]
+    assert len(saved) == REGRESSION_ROWS
+    assert saved.types[REGRESSION_TARGET].to_string() == {
+        "type": "Float",
+        "dtype": "float64",
+    }
+    predictions = saved[REGRESSION_TARGET]
+    assert all(isinstance(value, float) for value in predictions)
+    # Continuous values, not integers that happen to be stored as floats.
+    assert any(value != round(value) for value in predictions)
+
+
+# --------------------------------------------------------------------------- #
+# Predicting on one partition of the training dataset (#858)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_prediction_on_a_partition_covers_exactly_its_rows(
+    client, trained_run_id, dataset_1
+):
+    """Regression: the partition the request names used to be ignored.
+
+    The endpoint stored ``split``, the splits endpoint listed the partitions
+    and the front offered the selector, but the job loaded every row and
+    finished without a word, so asking for "test" returned train, validation
+    and test alike. The saved prediction now holds the rows of that partition
+    and no others, the same rows the run was scored on.
+    """
+    prediction_id = _create_prediction(
+        client, trained_run_id, dataset_1.id, split="test"
+    )
+
+    PredictJob(prediction_id=prediction_id).run()
+
+    stored = _stored_prediction(client, prediction_id)
+    assert stored["status"] == PredictionStatus.FINISHED
+
+    test_indexes = _run_split_indexes(client, trained_run_id)["test_indexes"]
+    assert 0 < len(test_indexes) < IRIS_ROWS, "the partition must be a proper subset"
+
+    saved = load_dataset(str(Path(stored["results_path"]) / "dataset"))
+    assert saved.column_names == INPUT_COLUMNS + [OUTPUT_COLUMN]
+    assert len(saved) == len(test_indexes)
+
+    # Not only the right count: the very rows of the partition, in its order.
+    original = load_dataset(str(Path(dataset_1.file_path) / "dataset"))
+    expected = original.select(test_indexes).select_columns(INPUT_COLUMNS)
+    assert saved.select_columns(INPUT_COLUMNS).to_dict() == expected.to_dict()
+
+
+def test_a_partition_the_run_does_not_have_ends_the_prediction_in_error(
+    client, trained_run_id, dataset_1
+):
+    """A bad partition name fails with its own message, and marks the row.
+
+    Resolved ahead of loading the dataset, so it neither falls into the
+    generic "invalid input data" wrapper nor leaves the prediction STARTED.
+    """
+    prediction_id = _create_prediction(
+        client, trained_run_id, dataset_1.id, split="fold-7"
+    )
+
+    with pytest.raises(
+        JobError,
+        match="Cannot predict on the fold-7 split: fold-7 is not a partition",
+    ):
+        PredictJob(prediction_id=prediction_id).run()
+
+    assert _stored_prediction(client, prediction_id)["status"] == PredictionStatus.ERROR
+
+
+def test_a_partition_name_means_nothing_on_a_dataset_the_run_was_not_trained_on(
+    client, trained_run_id, dataset_1
+):
+    """The row indexes of a run describe its training dataset only.
+
+    On any other dataset the name is ignored rather than applied to rows it
+    was never computed for, and every row is predicted.
+    """
+    other = _make_prediction_dataset(client, dataset_1)
+    prediction_id = _create_prediction(client, trained_run_id, other.id, split="test")
+
+    PredictJob(prediction_id=prediction_id).run()
+
+    stored = _stored_prediction(client, prediction_id)
+    assert stored["status"] == PredictionStatus.FINISHED
+    saved = load_dataset(str(Path(stored["results_path"]) / "dataset"))
+    assert len(saved) == IRIS_ROWS
 
 
 def test_a_missing_prediction_row_is_a_404(client):

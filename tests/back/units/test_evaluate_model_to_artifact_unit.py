@@ -47,8 +47,10 @@ class _Model:
         return [0, 1]
 
     # The two methods under test come from BaseModel; this stands in for it
-    # closely enough to exercise the unit without training anything.
+    # closely enough to exercise the unit without training anything. Both
+    # score through ``_score_split``, so the double borrows that one too.
     compute_metrics = None  # replaced below
+    _score_split = None  # replaced below
 
     # Declared because ``calculate_metrics`` reads it directly: it is a class
     # attribute of ``BaseModel``, so every real model has it, but this double
@@ -62,6 +64,7 @@ def _model(**kwargs):
 
     model = _Model(**kwargs)
     model.compute_metrics = BaseModel.compute_metrics.__get__(model, _Model)
+    model._score_split = BaseModel._score_split.__get__(model, _Model)
     return model
 
 

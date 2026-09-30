@@ -5,6 +5,7 @@ composability mistakes: a job always wires the context "correctly", so an
 end-to-end run cannot tell a real contract from a lucky one.
 """
 
+import pickle
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,9 @@ from DashAI.back.dataloaders.classes.dashai_dataset import (
     to_dashai_dataset,
 )
 from DashAI.back.job.base_job import JobError
+from DashAI.back.units.apply_session_preprocessing_unit import (
+    ApplySessionPreprocessingUnit,
+)
 from DashAI.back.units.context import ExecutionContext, UnitContractError
 from DashAI.back.units.load_trained_model_unit import LoadTrainedModelUnit
 from DashAI.back.units.load_training_dataset_unit import LoadTrainingDatasetUnit
@@ -105,6 +109,28 @@ class RecordingTask:
         return to_dashai_dataset(frame, types=types)
 
 
+class _FittedPreprocessor:
+    """Stand-in for a pickled ``SessionPreprocessor``: derives one column.
+
+    Written to ``final.pkl`` the way ``PreprocessingJob`` leaves the real one,
+    so the unit is exercised through the artifact on disk rather than through
+    a monkeypatch. Fitting is forbidden: a persisted preprocessor is applied
+    to new rows, never refitted on them.
+    """
+
+    def __init__(self, source, derived):
+        self.source = source
+        self.derived = derived
+
+    def transform_dataset(self, dataset):
+        frame = dataset.to_pandas()
+        frame[self.derived] = frame[self.source] * 10
+        return _dataset(**{name: frame[name].tolist() for name in frame.columns})
+
+    def fit_transform(self, split):
+        raise AssertionError("a persisted preprocessor is never refitted")
+
+
 @pytest.fixture(name="registry")
 def fixture_registry():
     registry = {
@@ -150,6 +176,16 @@ def fixture_datasets_path(tmp_path):
     di["config"] = config
     yield config["DATASETS_PATH"]
     del di["config"]
+
+
+@pytest.fixture(name="preprocessing_artifacts")
+def fixture_preprocessing_artifacts(tmp_path):
+    """A session's artifacts folder, holding a fitted preprocessor for ``a``."""
+    root = tmp_path / "preprocessing"
+    root.mkdir()
+    with open(root / "final.pkl", "wb") as f:
+        pickle.dump(_FittedPreprocessor(source="a", derived="bin_a"), f)
+    return root
 
 
 # --- LoadTrainedModelUnit -----------------------------------------------
@@ -267,7 +303,11 @@ def test_an_unreadable_training_dataset_names_the_folder(tmp_path):
 
 def _ready_context(stored_training_dataset, dataset=None):
     ctx = ExecutionContext()
-    ctx.put("dataset", dataset if dataset is not None else _dataset(a=[1, 2], b=[3, 4]))
+    dataset = dataset if dataset is not None else _dataset(a=[1, 2], b=[3, 4])
+    # Both keys, by hand: a session with no preprocessing publishes the raw
+    # rows as the model input as well, and that is the shape these tests use.
+    ctx.put("dataset", dataset)
+    ctx.put("model_input", dataset)
     ctx.put("model", RecordingModel())
     LoadTrainingDatasetUnit(train_dataset_file_path=str(stored_training_dataset))(ctx)
     return ctx
@@ -324,7 +364,7 @@ def test_predict_without_a_model_is_rejected_before_it_starts(
     registry, stored_training_dataset
 ):
     ctx = ExecutionContext()
-    ctx.put("dataset", _dataset(a=[1]))
+    ctx.put("model_input", _dataset(a=[1]))
     LoadTrainingDatasetUnit(train_dataset_file_path=str(stored_training_dataset))(ctx)
 
     with pytest.raises(UnitContractError, match="Context key 'model'"):
@@ -335,18 +375,131 @@ def test_predict_without_a_training_dataset_is_rejected_before_it_starts(registr
     """A missing key means "the loader did not run", not "there is nothing to
     decode against" — so it has to fail loudly instead of predicting anyway."""
     ctx = ExecutionContext()
-    ctx.put("dataset", _dataset(a=[1]))
+    ctx.put("model_input", _dataset(a=[1]))
     ctx.put("model", RecordingModel())
 
     with pytest.raises(UnitContractError, match="Context key 'train_dataset'"):
         _predict_unit()(ctx)
 
 
+def test_predict_reads_the_model_input_and_not_the_raw_rows(
+    registry, stored_training_dataset
+):
+    """With a preprocessor in front, the input columns the model was trained
+    on exist only in what it published; the raw rows never had them."""
+    ctx = ExecutionContext()
+    ctx.put("dataset", _dataset(a=[1, 2]))
+    ctx.put("model_input", _dataset(a=[1, 2], bin_a=[10, 20]))
+    ctx.put("model", RecordingModel())
+    LoadTrainingDatasetUnit(train_dataset_file_path=str(stored_training_dataset))(ctx)
+
+    _predict_unit(input_columns=["bin_a"])(ctx)
+
+    assert ctx.require("model").seen_columns == ["bin_a"]
+
+
+def test_predict_does_not_fall_back_to_the_raw_rows(registry, stored_training_dataset):
+    """The raw rows alone are not enough: a quiet fallback to ``dataset`` would
+    hand a preprocessing session's model the columns it was never trained on."""
+    ctx = ExecutionContext()
+    ctx.put("dataset", _dataset(a=[1]))
+    ctx.put("model", RecordingModel())
+    LoadTrainingDatasetUnit(train_dataset_file_path=str(stored_training_dataset))(ctx)
+
+    with pytest.raises(UnitContractError, match="Context key 'model_input'"):
+        _predict_unit()(ctx)
+
+
+# --- ApplySessionPreprocessingUnit --------------------------------------
+
+
+def test_without_a_fitted_preprocessor_the_rows_go_through_as_they_are():
+    """A session with no steps still publishes the model input, so the
+    prediction step reads one key whether or not the session preprocesses."""
+    ctx = ExecutionContext()
+    dataset = _dataset(a=[1, 2], b=[3, 4])
+    ctx.put("dataset", dataset)
+
+    ApplySessionPreprocessingUnit(preprocessing_artifacts_path=None)(ctx)
+
+    assert ctx.require("model_input") is dataset
+    assert ctx.require("dataset") is dataset
+
+
+def test_the_persisted_preprocessor_is_applied_and_the_raw_rows_are_kept(
+    preprocessing_artifacts,
+):
+    """Transformed under its own key: the raw rows are what a prediction is
+    saved next to, so they have to survive untouched beside the model input."""
+    ctx = ExecutionContext()
+    ctx.put("dataset", _dataset(a=[1, 2], b=[3, 4]))
+
+    ApplySessionPreprocessingUnit(
+        preprocessing_artifacts_path=str(preprocessing_artifacts)
+    )(ctx)
+
+    assert ctx.require("model_input").column_names == ["a", "b", "bin_a"]
+    assert ctx.require("model_input")["bin_a"] == [10, 20]
+    assert ctx.require("dataset").column_names == ["a", "b"]
+
+
+def test_a_missing_preprocessor_artifact_is_reported_with_its_path(tmp_path):
+    ctx = ExecutionContext()
+    ctx.put("dataset", _dataset(a=[1]))
+
+    with pytest.raises(
+        JobError, match="Cannot load the session preprocessor from .*final.pkl"
+    ):
+        ApplySessionPreprocessingUnit(
+            preprocessing_artifacts_path=str(tmp_path / "nowhere")
+        )(ctx)
+
+    assert not ctx.has("model_input")
+
+
+def test_applying_preprocessing_without_rows_is_rejected_before_it_starts():
+    with pytest.raises(UnitContractError, match="Context key 'dataset'"):
+        ApplySessionPreprocessingUnit(preprocessing_artifacts_path=None)(
+            ExecutionContext()
+        )
+
+
+def test_the_model_sees_the_derived_column_and_the_save_keeps_the_raw_ones(
+    registry, stored_training_dataset, datasets_path, preprocessing_artifacts
+):
+    """The three units composed, which is the whole point of the separate key.
+
+    The model was trained on ``bin_a``, a column the raw rows do not have; the
+    prediction has to be made on it and saved next to ``a`` and ``b`` only,
+    which is what the job used to do when it transformed a local variable and
+    saved the one it had loaded.
+    """
+    ctx = ExecutionContext()
+    ctx.put("dataset", _dataset(a=[1, 2], b=[3, 4]))
+    ctx.put("model", RecordingModel())
+    LoadTrainingDatasetUnit(train_dataset_file_path=str(stored_training_dataset))(ctx)
+
+    ApplySessionPreprocessingUnit(
+        preprocessing_artifacts_path=str(preprocessing_artifacts)
+    )(ctx)
+    _predict_unit(input_columns=["bin_a"])(ctx)
+    _save_unit(input_columns=["bin_a"])(ctx)
+
+    assert ctx.require("model").seen_columns == ["bin_a"]
+    saved = load_dataset(str(Path(ctx.require("results_path")) / "dataset"))
+    assert saved.column_names == ["a", "b", "target"]
+    assert saved["target"] == ["label-0", "label-0"]
+
+
 # --- SavePredictionUnit -------------------------------------------------
 
 
 def _save_unit(**overrides):
-    config = {"input_columns": ["a"], "output_columns": ["target"]}
+    config = {
+        "task_name": "RecordingTask",
+        "input_columns": ["a"],
+        "output_columns": ["target"],
+    }
     config.update(overrides)
     return SavePredictionUnit(**config)
 
@@ -421,3 +574,77 @@ def test_the_published_results_path_is_a_plain_string(
     _save_unit()(ctx)
 
     assert isinstance(ctx.to_dict()["results_path"], str)
+
+
+# --- SavePredictionUnit: the type of the predicted column --------------------
+
+
+@pytest.fixture(name="regression_registry")
+def fixture_regression_registry(registry):
+    from DashAI.back.tasks.regression_task import RegressionTask
+
+    # Built here rather than at module level: the task modules are light, but
+    # the double only means anything next to the registry it is put in.
+    regression = type("RecordingRegressionTask", (RegressionTask,), {})
+    registry["RecordingRegressionTask"] = {"class": regression}
+    return registry
+
+
+def _integer_target_context(tmp_path):
+    """A training dataset whose target is integer typed, and float predictions.
+
+    The shape of the failure: the target was trained as ``int64``, the model
+    predicts ``1.5``, and the saved schema inherits the training type.
+    """
+    root = tmp_path / "training-integer-target"
+    save_dataset(
+        _dataset(a=[1, 2, 3], b=[4, 5, 6], target=[7, 8, 9]), str(root / "dataset")
+    )
+    ctx = ExecutionContext()
+    ctx.put("dataset", _dataset(a=[1, 2], b=[3, 4]))
+    LoadTrainingDatasetUnit(train_dataset_file_path=str(root))(ctx)
+    ctx.put("y_pred", [1.5, 2.5])
+    return ctx
+
+
+def test_a_regression_saves_its_predicted_column_as_float(
+    regression_registry, tmp_path, datasets_path
+):
+    """Regression: an integer-typed target made the save refuse the cast.
+
+    A regression predicts continuous values whatever type its target was
+    trained as. Inheriting the training type declared the predicted column
+    ``int64``, and Arrow refused to truncate ``1.5`` into it, so every
+    prediction of such a run ended in error. v0.10.0 overrode the type for
+    regression tasks; the unit lost it when the job was decomposed.
+    """
+    ctx = _integer_target_context(tmp_path)
+
+    _save_unit(task_name="RecordingRegressionTask")(ctx)
+
+    saved = load_dataset(str(Path(ctx.require("results_path")) / "dataset"))
+    assert saved["target"] == [1.5, 2.5]
+    assert saved.types["target"].to_string() == {"type": "Float", "dtype": "float64"}
+
+
+def test_any_other_task_keeps_the_type_its_target_was_trained_as(
+    registry, tmp_path, datasets_path
+):
+    """The override is scoped to regression: a classifier's labels keep theirs."""
+    ctx = _integer_target_context(tmp_path)
+    ctx.put("y_pred", [1, 2])
+
+    _save_unit(task_name="RecordingTask")(ctx)
+
+    saved = load_dataset(str(Path(ctx.require("results_path")) / "dataset"))
+    assert saved["target"] == [1, 2]
+    assert saved.types["target"].to_string() == {"type": "Integer", "dtype": "int64"}
+
+
+def test_save_reports_a_task_missing_from_the_registry(
+    registry, tmp_path, datasets_path
+):
+    ctx = _integer_target_context(tmp_path)
+
+    with pytest.raises(JobError, match="Task NoSuchTask not found in the registry"):
+        _save_unit(task_name="NoSuchTask")(ctx)

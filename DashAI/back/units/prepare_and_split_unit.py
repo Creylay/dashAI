@@ -7,9 +7,11 @@ from DashAI.back.units.base_unit import BaseUnit
 from DashAI.back.units.context import ExecutionContext
 from DashAI.back.units.splitter_scope import (
     SplitterScopeMixin,
+    input_column_refs_field,
     input_columns_field,
     output_columns_field,
     partition_splitter_field,
+    preprocessing_artifacts_path_field,
     task_name_field,
 )
 
@@ -21,6 +23,8 @@ class PrepareAndSplitSchema(BaseSchema):
     input_columns: input_columns_field()  # type: ignore
     output_columns: output_columns_field()  # type: ignore
     splitter: partition_splitter_field()  # type: ignore
+    input_column_refs: input_column_refs_field()  # type: ignore
+    preprocessing_artifacts_path: preprocessing_artifacts_path_field()  # type: ignore
 
 
 class PrepareAndSplitUnit(BaseUnit, SplitterScopeMixin):
@@ -43,6 +47,15 @@ class PrepareAndSplitUnit(BaseUnit, SplitterScopeMixin):
     key names cannot express: the same key holding two shapes would validate
     statically and fail at run time. The fold unit therefore publishes
     ``x_folds`` and ``y_folds`` rather than reusing ``x`` and ``y``.
+
+    A session that ran a preprocessing sequence sets two optional fields
+    together, ``input_column_refs`` and ``preprocessing_artifacts_path``.
+    They are schema fields and not runtime params on purpose: a runtime param
+    is demanded of every node, and a graph with no preprocessing has nothing
+    to supply. With them the task is validated on the raw refs alone, the
+    split carries every raw column, and the one entry is transformed with
+    ``final.pkl`` before it is published, so what comes out is what the
+    model reads.
     """
 
     SCHEMA = PrepareAndSplitSchema
@@ -64,8 +77,19 @@ class PrepareAndSplitUnit(BaseUnit, SplitterScopeMixin):
         dataset = ctx.require("dataset")
         dataset_id = ctx.require("dataset_id")
 
-        task, n_labels, x, y = self._prepare(dataset, dataset_id)
+        # Read here and not in the shared body, so the audit that parses this
+        # class sees the two fields being read against their declaration.
+        preprocessing = self._persisted_preprocessing(
+            self.config.get("preprocessing_artifacts_path"),
+            self.config.get("input_column_refs"),
+        )
+
+        task, n_labels, x, y = self._prepare(dataset, dataset_id, preprocessing)
         x, y, split_indexes = self._split(x, y)
+        if preprocessing is not None:
+            # A holdout split is a single entry, and the job fitted it as the
+            # trailing one.
+            (x,) = self._apply_preprocessing([x], ["final"], preprocessing)
 
         ctx.put_ref("task_name", self.config["task_name"])
         ctx.put_ref("split_indexes", split_indexes)

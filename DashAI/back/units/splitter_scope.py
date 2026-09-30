@@ -6,6 +6,11 @@ and hand the pair to a splitter -- and differ only in which family of splitters
 they offer and in the shape of what comes back. Keeping the body here is what
 stops the two from drifting into two answers for the same dataset.
 
+When the session ran a preprocessing sequence there is a fifth thing, done
+after the split: every entry the splitter produced is transformed with the
+``SessionPreprocessor`` that ``PreprocessingJob`` fitted for it, so nothing
+downstream ever sees a raw column the model was not meant to read.
+
 Named ``SplitterScopeMixin`` rather than ``BaseSomething`` on purpose: the
 registry derives a component's type by walking its ``__mro__`` for a class whose
 name contains "Base" and that declares ``TYPE``, and demands exactly one. A
@@ -14,11 +19,12 @@ registration of every unit that inherited it.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 
 from DashAI.back.core.schema_fields import (
     component_field,
     list_field,
+    none_type,
     schema_field,
     string_field,
 )
@@ -88,6 +94,89 @@ def output_columns_field():
             pt="Colunas de saída",
             de="Ausgabespalten",
             zh="输出列",
+        ),
+    )
+
+
+def input_column_refs_field():
+    """The columns the model reads, as references a session stores.
+
+    Optional, and only meaningful next to ``preprocessing_artifacts_path``: a
+    raw ref names a column of the dataset, a group ref names whatever a
+    converter step produces, and the latter only resolves against the fit
+    the job persisted at that path. Without the pair, ``input_columns`` is
+    what the model reads.
+    """
+    return schema_field(
+        none_type(list),
+        placeholder=None,
+        description=MultilingualString(
+            en="Column references the model reads when the session ran a "
+            "preprocessing sequence: {'kind': 'raw', 'name': ...} for a "
+            "column of the dataset, {'kind': 'group', 'step': n} for what "
+            "converter step n produces. Set together with the artifacts path, "
+            "or not at all.",
+            es="Referencias a las columnas que lee el modelo cuando la sesión "
+            "ejecutó una secuencia de preprocesamiento: {'kind': 'raw', "
+            "'name': ...} para una columna del conjunto de datos, {'kind': "
+            "'group', 'step': n} para lo que produce el paso n. Se indica "
+            "junto con la ruta de artefactos, o no se indica.",
+            pt="Referências às colunas que o modelo lê quando a sessão executou "
+            "uma sequência de pré-processamento: {'kind': 'raw', 'name': ...} "
+            "para uma coluna do conjunto de dados, {'kind': 'group', 'step': "
+            "n} para o que o passo n produz. Indica-se junto com o caminho "
+            "dos artefatos, ou não se indica.",
+            de="Spaltenreferenzen, die das Modell liest, wenn die Sitzung eine "
+            "Vorverarbeitungssequenz ausgeführt hat: {'kind': 'raw', 'name': "
+            "...} für eine Spalte des Datensatzes, {'kind': 'group', 'step': "
+            "n} für das, was Schritt n erzeugt. Zusammen mit dem Artefaktpfad "
+            "angeben, oder gar nicht.",
+            zh="会话运行了预处理序列时模型读取的列引用：{'kind': 'raw', "
+            "'name': ...} 表示数据集的列，{'kind': 'group', 'step': n} 表示"
+            "第 n 步转换器产生的列。与工件路径一起设置，或都不设置。",
+        ),
+        alias=MultilingualString(
+            en="Input column references",
+            es="Referencias de columnas de entrada",
+            pt="Referências de colunas de entrada",
+            de="Eingabespaltenreferenzen",
+            zh="输入列引用",
+        ),
+    )
+
+
+def preprocessing_artifacts_path_field():
+    """Where the session's fitted preprocessors live.
+
+    Optional. ``PreprocessingJob`` writes one fitted ``SessionPreprocessor``
+    per entry the splitter produces, ``fold_{i}.pkl`` and ``final.pkl``, and
+    the unit loads the matching one for each entry it publishes.
+    """
+    return schema_field(
+        none_type(string_field()),
+        placeholder=None,
+        description=MultilingualString(
+            en="Directory holding the preprocessing fitted for this session, "
+            "one artifact per split entry. Set together with the input column "
+            "references, or not at all.",
+            es="Directorio con el preprocesamiento ajustado para esta sesión, "
+            "un artefacto por entrada de la partición. Se indica junto con "
+            "las referencias de columnas de entrada, o no se indica.",
+            pt="Diretório com o pré-processamento ajustado para esta sessão, "
+            "um artefato por entrada da partição. Indica-se junto com as "
+            "referências de colunas de entrada, ou não se indica.",
+            de="Verzeichnis mit der für diese Sitzung angepassten "
+            "Vorverarbeitung, ein Artefakt pro Aufteilungseintrag. Zusammen "
+            "mit den Eingabespaltenreferenzen angeben, oder gar nicht.",
+            zh="存放为此会话拟合的预处理的目录，每个划分条目一个工件。"
+            "与输入列引用一起设置，或都不设置。",
+        ),
+        alias=MultilingualString(
+            en="Fitted preprocessing",
+            es="Preprocesamiento ajustado",
+            pt="Pré-processamento ajustado",
+            de="Angepasste Vorverarbeitung",
+            zh="已拟合的预处理",
         ),
     )
 
@@ -165,6 +254,29 @@ def fold_splitter_field():
     )
 
 
+class PersistedPreprocessing(NamedTuple):
+    """A session's fitted preprocessing, as the two prepare units receive it.
+
+    Built from the two optional fields by ``_persisted_preprocessing``. The
+    units never read it from the context: it describes what a job already
+    did for the session, not what an upstream unit produced.
+    """
+
+    #: Directory where ``PreprocessingJob`` persisted one fitted
+    #: ``SessionPreprocessor`` per entry the splitter produces, as
+    #: ``fold_{i}.pkl`` and ``final.pkl``.
+    artifacts_path: str
+    #: The parsed column references the model reads. A raw one names a column
+    #: of the dataset; a group one names the output of a converter step, which
+    #: only exists once that step has run.
+    input_refs: List[Any]
+
+    @property
+    def raw_input_names(self) -> List[str]:
+        """The refs that name a column present before any converter runs."""
+        return [ref.name for ref in self.input_refs if ref.kind == "raw"]
+
+
 class SplitterScopeMixin:
     """Prepare a dataset for a task and hand it to a splitter.
 
@@ -238,10 +350,61 @@ class SplitterScopeMixin:
                 f"Error instantiating splitter {splitter_name}, {e}",
             ) from e
 
+    @staticmethod
+    def _persisted_preprocessing(
+        artifacts_path: Optional[str], input_column_refs: Optional[List[dict]]
+    ) -> Optional[PersistedPreprocessing]:
+        """Pair the two optional fields, or None when the session has no steps.
+
+        They come together or not at all. A ref that names a converter's
+        output group only resolves against the fit that produced it, and a
+        fitted sequence with no refs leaves the model with no columns to read.
+        So one without the other is a wiring mistake, and it is reported as
+        one rather than read as "not applicable".
+        """
+        if artifacts_path is None and input_column_refs is None:
+            return None
+        if artifacts_path is None or input_column_refs is None:
+            raise JobError(
+                "preprocessing_artifacts_path and input_column_refs come "
+                "together: a session with preprocessing steps supplies both.",
+            )
+
+        from DashAI.back.preprocessing.column_ref import parse_column_refs
+
+        try:
+            input_refs = parse_column_refs(input_column_refs)
+        except Exception as e:
+            log.exception(e)
+            raise JobError(
+                f"Can not parse input column refs {input_column_refs}: {e}",
+            ) from e
+        return PersistedPreprocessing(
+            artifacts_path=artifacts_path, input_refs=input_refs
+        )
+
     def _prepare(
-        self, dataset: "DashAIDataset", dataset_id: Any
+        self,
+        dataset: "DashAIDataset",
+        dataset_id: Any,
+        preprocessing: Optional[PersistedPreprocessing] = None,
     ) -> Tuple["BaseTask", int, "DashAIDataset", "DashAIDataset"]:
         """Validate the dataset against the task and separate x from y.
+
+        Parameters
+        ----------
+        dataset : DashAIDataset
+            The loaded dataset.
+        dataset_id : Any
+            Only decorates the error messages.
+        preprocessing : PersistedPreprocessing, optional
+            The session's fitted preprocessing, when it has one. The
+            converters run per entry after the split, so at this point only
+            the raw refs name columns that exist: those are what the task
+            validates, and ``x`` keeps every column of the prepared dataset
+            rather than the inputs, because a converter's scope may name a
+            column that is not itself a final input. ``y`` is narrowed either
+            way, since an output ref is always raw.
 
         Returns
         -------
@@ -256,6 +419,8 @@ class SplitterScopeMixin:
         task_name: str = self.config["task_name"]
         input_columns: List[str] = self.config["input_columns"]
         output_columns: List[str] = self.config["output_columns"]
+        if preprocessing is not None:
+            input_columns = preprocessing.raw_input_names
 
         try:
             prepared_dataset = task.prepare_for_task(
@@ -275,7 +440,11 @@ class SplitterScopeMixin:
             # may reorder the rows, and forecasting does, sorting them by date
             # so a temporal splitter carves real periods of time. Selecting
             # from the loaded dataset would drop that work on the floor.
-            x, y = select_columns(prepared_dataset, input_columns, output_columns)
+            if preprocessing is not None:
+                x = prepared_dataset
+                y = prepared_dataset.select_columns(output_columns)
+            else:
+                x, y = select_columns(prepared_dataset, input_columns, output_columns)
         except Exception as e:
             log.exception(e)
             raise JobError(
@@ -283,6 +452,74 @@ class SplitterScopeMixin:
             ) from e
 
         return task, n_labels, x, y
+
+    @staticmethod
+    def _apply_preprocessing(
+        entries: List[Dict[str, "DashAIDataset"]],
+        names: List[str],
+        preprocessing: PersistedPreprocessing,
+    ) -> List[Dict[str, "DashAIDataset"]]:
+        """Transform each entry the splitter produced with the fit made for it.
+
+        ``PreprocessingJob`` fitted one ``SessionPreprocessor`` per entry, on
+        that entry's own training partition, and persisted it under
+        ``artifacts_path`` as ``{name}.pkl``: ``fold_{i}`` for each fold and
+        ``final`` for the trailing entry, which for a holdout split is the
+        only one. Loading the matching one here is what keeps a fold from
+        seeing statistics fitted on the rows it is scored on.
+
+        Pure on purpose: it takes the entries and returns new ones without
+        touching the context, so the audit that parses each unit's own source
+        still sees every key the unit publishes.
+
+        Parameters
+        ----------
+        entries : list of dict
+            What the splitter returned for the input side, one
+            ``{partition: dataset}`` per entry.
+        names : list of str
+            The artifact each entry was fitted under, in the same order.
+        preprocessing : PersistedPreprocessing
+            Where the artifacts live and which columns the model reads.
+
+        Returns
+        -------
+        list of dict
+            The entries transformed and narrowed to the columns the input
+            refs resolve to against that entry's own fit. The output side
+            needs nothing: an output ref is always raw, so the splitter
+            already narrowed ``y``.
+        """
+        import os
+        import pickle
+
+        from DashAI.back.preprocessing.column_ref import resolve_refs
+
+        transformed_entries = []
+        for entry, name in zip(entries, names, strict=True):
+            artifact = os.path.join(preprocessing.artifacts_path, f"{name}.pkl")
+            try:
+                with open(artifact, "rb") as file:
+                    preprocessor = pickle.load(file)
+                transformed = preprocessor.transform_only(entry)
+                input_columns = resolve_refs(
+                    preprocessing.input_refs,
+                    preprocessor.resolved_columns,
+                    preprocessor.resolved_slots,
+                )
+                transformed_entries.append(
+                    {
+                        partition: dataset.select_columns(input_columns)
+                        for partition, dataset in transformed.items()
+                    }
+                )
+            except Exception as e:
+                log.exception(e)
+                raise JobError(
+                    f"Error applying the preprocessing fitted for {name} "
+                    f"from {artifact}: {e}",
+                ) from e
+        return transformed_entries
 
     def _split(self, x: "DashAIDataset", y: "DashAIDataset"):
         """Partition the pair with the configured splitter.

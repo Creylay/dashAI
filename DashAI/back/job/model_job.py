@@ -494,12 +494,23 @@ class ModelJob(BaseJob):
             if getattr(splitter_class, "PARTITIONING", "holdout") == "folds"
             else PrepareAndSplitUnit
         )
-        prepare_unit = prepare_class(
-            task_name=model_session.task_name,
-            input_columns=model_session.input_columns,
-            output_columns=model_session.output_columns,
-            splitter={"component": splitter_name, "params": splits_data},
-        )
+        prepare_config = {
+            "task_name": model_session.task_name,
+            "input_columns": model_session.input_columns,
+            "output_columns": model_session.output_columns,
+            "splitter": {"component": splitter_name, "params": splits_data},
+        }
+        if model_session.preprocessing and model_session.preprocessing.get("steps"):
+            # PreprocessingJob fitted the sequence once per entry and left the
+            # artifacts at this path; the refs are what the wizard stored,
+            # and the unit resolves them against each entry's own fit. Passed
+            # only when there are steps: the unit reads their absence as "no
+            # preprocessing" and one without the other as a wiring mistake.
+            prepare_config["input_column_refs"] = model_session.input_column_refs or []
+            prepare_config["preprocessing_artifacts_path"] = (
+                model_session.preprocessing_artifacts_path
+            )
+        prepare_unit = prepare_class(**prepare_config)
 
         try:
             # Get the optimizer if defined

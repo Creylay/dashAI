@@ -29,9 +29,8 @@
     "confirmDelete": "Delete the downloaded files for {{name}}? You can download it again later.",
     "delete": "Delete download",
     "deleted": "Download deleted",
-    "deleteWithSize": "Delete download ({{size}})",
     "done": "Component downloaded",
-    "download": "Download ({{size}})",
+    "download": "Download",
     "downloading": "Downloading...",
     "failed": "Component download failed",
     "mustDownload": "This model must be downloaded before use",
@@ -111,6 +110,7 @@
     "confirmClearAll": "Are you sure you want to delete ALL registered jobs?",
     "confirmClearAllDetail": "This will cancel all jobs in the queue.",
     "confirmDeleteJob": "Are you sure you want to delete this job?",
+    "confirmCancelJob": "Are you sure you want to cancel this job?",
     "deleteJob": "Delete job",
     "details": {
       "errorMessage": "Error Message",
@@ -127,7 +127,9 @@
       "running": "Running",
       "completed": "Completed",
       "failed": "Failed",
-      "deleted": "Deleted"
+      "deleted": "Deleted",
+      "cancelled": "Cancelled",
+      "killed": "Interrupted"
     },
     "failedCount_one": "{{count}} failed",
     "failedCount_other": "{{count}} failed",
@@ -135,6 +137,7 @@
     "noActiveJobs": "No active jobs",
     "noCompletedJobs": "No completed jobs",
     "cancelJob": "Cancel job",
+    "jobCancelled": "The job was cancelled.",
     "noJobs": "No jobs in queue",
     "refresh": "Refresh",
     "relativeTime": {

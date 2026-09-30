@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from fastapi import status
 from fastapi.encoders import jsonable_encoder
@@ -9,6 +9,10 @@ from sqlalchemy import exc
 
 from DashAI.back.dependencies.database.models import Dataset, ModelSession, Prediction
 from DashAI.back.job.base_job import BaseJob, JobError
+from DashAI.back.splitters.splits_payload import run_split_indexes
+from DashAI.back.units.apply_session_preprocessing_unit import (
+    ApplySessionPreprocessingUnit,
+)
 from DashAI.back.units.build_manual_input_unit import BuildManualInputUnit
 from DashAI.back.units.context import ExecutionContext
 from DashAI.back.units.load_dataset_unit import LoadDatasetUnit
@@ -24,6 +28,28 @@ if TYPE_CHECKING:
 
 logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
+
+
+def _preprocessing_artifacts_path(model_session: ModelSession) -> Optional[str]:
+    """Where the session's fitted preprocessor lives, or None when it has none.
+
+    A session preprocesses when it declares steps; only then does the
+    artifacts path mean anything, so the two are read together and the path
+    alone travels to the unit that applies it.
+    """
+    if not (model_session.preprocessing and model_session.preprocessing.get("steps")):
+        return None
+    artifacts_path = model_session.preprocessing_artifacts_path
+    if not artifacts_path:
+        # Without this the rows would silently be predicted raw, which is the
+        # one thing a session with steps must never do. Training refuses the
+        # same state in SplitterScopeMixin; the runs endpoint keeps it out of
+        # reach with a 409, so this is the job's own last line.
+        raise JobError(
+            "This session declares preprocessing steps but has no fitted "
+            "preprocessor: its preprocessing has not finished or failed."
+        )
+    return artifacts_path
 
 
 def _build_preview_rows(
@@ -143,6 +169,12 @@ def run_manual_prediction(
         input_columns = list(model_session.input_columns)
         output_columns = list(model_session.output_columns)
         train_dataset_file_path = dataset_trained.file_path
+        try:
+            preprocessing_artifacts_path = _preprocessing_artifacts_path(model_session)
+        except JobError as e:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(e)
+            ) from e
 
     ctx = ExecutionContext()
 
@@ -150,6 +182,9 @@ def run_manual_prediction(
         task_name=task_name,
         train_dataset_file_path=train_dataset_file_path,
         manual_input_data=manual_input_data,
+    )
+    apply_preprocessing = ApplySessionPreprocessingUnit(
+        preprocessing_artifacts_path=preprocessing_artifacts_path,
     )
     predict = PredictUnit(
         task_name=task_name,
@@ -193,11 +228,17 @@ def run_manual_prediction(
 
         try:
             build_input(ctx)
+            # Hand-typed rows carry the raw columns; a session that preprocesses
+            # was trained on derived ones, and its input columns only exist
+            # once the fitted preprocessor has run over the rows.
+            apply_preprocessing(ctx)
             predict(ctx)
-            # Re-derived here rather than published by the unit: a narrowed view
-            # of the dataset is exactly the kind of derived value that must not
-            # cross a unit boundary, since anything upstream may reshape it.
-            prepared_dataset = ctx.require("dataset").select_columns(input_columns)
+            # The preview shows what the model saw, so it is narrowed from the
+            # model input and not from the raw rows. Re-derived here rather
+            # than published by the unit: a narrowed view of the dataset is
+            # exactly the kind of derived value that must not cross a unit
+            # boundary, since anything upstream may reshape it.
+            prepared_dataset = ctx.require("model_input").select_columns(input_columns)
         except (ValueError, TypeError) as e:
             logging.exception("Manual prediction input error: %s", e)
             raise HTTPException(
@@ -284,6 +325,7 @@ class PredictJob(BaseJob):
         self,
     ) -> List[Any]:
         session_factory = di["session_factory"]
+        component_registry = di["component_registry"]
 
         ctx = ExecutionContext()
 
@@ -408,18 +450,67 @@ class PredictJob(BaseJob):
                 log.exception(e)
                 raise
 
+            # The rows to predict on, when the request names a partition of
+            # the run. A partition only means something on the dataset the
+            # model was trained on; on any other dataset the name is ignored,
+            # as it always was. Resolved ahead of the load so a partition the
+            # run does not have fails with its own message rather than as
+            # invalid input data, and so the row remains in error.
+            row_indexes = None
+            if prediction.split and dataset_id == model_session.dataset_id:
+                try:
+                    row_indexes = run_split_indexes(
+                        model_session.splits,
+                        prediction.run.split_indexes,
+                        component_registry,
+                        prediction.split,
+                    )
+                except ValueError as e:
+                    prediction.set_status_as_error()
+                    db.commit()
+                    log.exception(e)
+                    raise JobError(
+                        f"Cannot predict on the {prediction.split} split: {e}"
+                    ) from e
+
+            # Resolved ahead of the generic handler below, which would replace
+            # this message with "Model prediction failed".
+            try:
+                preprocessing_artifacts_path = _preprocessing_artifacts_path(
+                    model_session
+                )
+            except JobError as e:
+                prediction.set_status_as_error()
+                db.commit()
+                log.exception(e)
+                raise
+
             try:
                 # Load or create prediction dataset. Both branches publish the
                 # same "dataset" key, so the prediction below cannot tell a
                 # dataset read from disk from one typed in by hand.
                 if dataset_id:
                     LoadDatasetUnit(dataset_id=dataset_id)(ctx)
+                    # Narrowed on the raw rows, straight after the load and
+                    # before anything downstream reshapes them, and written
+                    # back under the same key: the saved prediction has to
+                    # cover the rows that were asked for and no others.
+                    if row_indexes is not None:
+                        ctx.put("dataset", ctx.require("dataset").select(row_indexes))
                 else:
                     BuildManualInputUnit(
                         task_name=model_session.task_name,
                         train_dataset_file_path=dataset_trained.file_path,
                         manual_input_data=manual_input_data,
                     )(ctx)
+
+                # After the narrowing and before the prediction: the fitted
+                # preprocessor runs over exactly the rows that were asked for,
+                # and the model reads the columns it was trained on from what
+                # it publishes. The raw rows stay under "dataset" for the save.
+                ApplySessionPreprocessingUnit(
+                    preprocessing_artifacts_path=preprocessing_artifacts_path,
+                )(ctx)
 
                 self.report_progress(0.4, "Running prediction")
                 predict(ctx)
@@ -455,6 +546,7 @@ class PredictJob(BaseJob):
             # Save Predictions to Arrow file
             try:
                 SavePredictionUnit(
+                    task_name=model_session.task_name,
                     input_columns=model_session.input_columns,
                     output_columns=model_session.output_columns,
                 )(ctx)

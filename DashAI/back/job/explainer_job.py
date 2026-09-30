@@ -186,6 +186,30 @@ class ExplainerJob(BaseJob):
                 input_columns = model_session.input_columns
                 output_columns = model_session.output_columns
 
+                # A session that preprocessed its data records the columns its
+                # converters produced, so the units that touch rows have to
+                # apply the persisted final.pkl first. The path is handed over
+                # only when there are steps; without it the units apply
+                # nothing, the same as before preprocessing existed.
+                preprocessing = {}
+                if model_session.preprocessing and model_session.preprocessing.get(
+                    "steps"
+                ):
+                    if not model_session.preprocessing_artifacts_path:
+                        # Explaining raw rows with a model fitted on transformed
+                        # ones would be silently wrong; training and prediction
+                        # refuse the same state.
+                        raise JobError(
+                            "This session declares preprocessing steps but has "
+                            "no fitted preprocessor: its preprocessing has not "
+                            "finished or failed."
+                        )
+                    preprocessing = {
+                        "preprocessing_artifacts_path": (
+                            model_session.preprocessing_artifacts_path
+                        )
+                    }
+
                 LoadRunModelUnit(run_id=run.id)(ctx)
 
                 # How the explainer configuration is stored on the row — the
@@ -208,6 +232,7 @@ class ExplainerJob(BaseJob):
                     task_name=model_session.task_name,
                     input_columns=input_columns,
                     output_columns=output_columns,
+                    **preprocessing,
                 )
                 # Resolving the task outside the wrapper below keeps a missing
                 # task reported as a registry problem rather than a generic
@@ -286,6 +311,7 @@ class ExplainerJob(BaseJob):
                         manual_input_data=self.kwargs.get("manual_input_data"),
                         same_dataset=same_dataset,
                         session_splits=(None if same_dataset else model_session.splits),
+                        **preprocessing,
                     )(ctx)
                     paths = {
                         "explanation_path": ctx.require("explanation_path"),

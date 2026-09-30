@@ -343,6 +343,16 @@ NEEDS_A_WIDGET = {
     ("generate_local_explanation_unit.py", "instance_dataset_id"): "dataset selector",
     ("build_manual_input_unit.py", "manual_input_data"): "typed row editor",
     ("generate_local_explanation_unit.py", "manual_input_data"): "typed row editor",
+    # The directory a job wrote a session's fitted preprocessing to. Not a
+    # runtime param, because one is demanded of every node and a graph with
+    # no preprocessing has nothing to supply; on a canvas it is the session
+    # whose fit to reuse, which is a selection.
+    ("prepare_and_split_unit.py", "preprocessing_artifacts_path"): (
+        "fitted preprocessing selector"
+    ),
+    ("prepare_and_fold_unit.py", "preprocessing_artifacts_path"): (
+        "fitted preprocessing selector"
+    ),
 }
 
 

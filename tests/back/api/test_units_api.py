@@ -23,6 +23,7 @@ EXPECTED_UNITS = {
     "LoadTrainedModelUnit",
     "LoadTrainingDatasetUnit",
     "BuildManualInputUnit",
+    "ApplySessionPreprocessingUnit",
     "PredictUnit",
     "SavePredictionUnit",
     "LoadRunModelUnit",
@@ -68,13 +69,19 @@ def test_unit_schemas_describe_their_configuration(units):
         "notebook_id",
     }
     # The two splitting units are the same form with a different family of
-    # splitters offered, which is the whole of what separates them.
+    # splitters offered, which is the whole of what separates them. The last
+    # two fields are optional and come as a pair: a session that ran a
+    # preprocessing sequence sets both, a graph with none sets neither. They
+    # are not runtime params because a runtime param is demanded of every
+    # node, and that would leave the unit unusable on a canvas.
     for name in ("PrepareAndSplitUnit", "PrepareAndFoldUnit"):
         assert set(units[name]["schema"]["properties"]) == {
             "task_name",
             "input_columns",
             "output_columns",
             "splitter",
+            "input_column_refs",
+            "preprocessing_artifacts_path",
         }, name
     assert (
         units["PrepareAndSplitUnit"]["schema"]["properties"]["splitter"]["parent"]
@@ -111,12 +118,16 @@ def test_unit_schemas_describe_their_configuration(units):
     # serialised belongs to the explorer that produced it.
     assert set(units["SaveExplorationUnit"]["schema"]["properties"]) == {"explorer_id"}
     assert set(units["LoadTrainedModelUnit"]["schema"]["properties"]) == {"run_id"}
+    # Nothing to choose: the fitted preprocessor is the session's, and where it
+    # lives is a runtime param the job reads off the session row.
+    assert units["ApplySessionPreprocessingUnit"]["schema"]["properties"] == {}
     assert set(units["PredictUnit"]["schema"]["properties"]) == {
         "task_name",
         "input_columns",
         "output_columns",
     }
     assert set(units["SavePredictionUnit"]["schema"]["properties"]) == {
+        "task_name",
         "input_columns",
         "output_columns",
     }
@@ -228,7 +239,10 @@ EXPECTED_RUNTIME_PARAMS = {
     ("LoadUploadedDatasetUnit", "temp_path"),
     ("LoadTrainingDatasetUnit", "train_dataset_file_path"),
     ("BuildManualInputUnit", "train_dataset_file_path"),
+    ("ApplySessionPreprocessingUnit", "preprocessing_artifacts_path"),
     ("GenerateLocalExplanationUnit", "session_splits"),
+    ("GenerateLocalExplanationUnit", "preprocessing_artifacts_path"),
+    ("PrepareExplanationDataUnit", "preprocessing_artifacts_path"),
     ("ComputeDatasetMetadataUnit", "trust_inherited_metadata"),
     ("BuildModelUnit", "run_id"),
     ("EvaluateModelUnit", "run_id"),

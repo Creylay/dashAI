@@ -126,3 +126,30 @@ def dump_explanation(explanation: Any, plots: Any, prefix: str, key: int) -> Tup
         ) from e
 
     return explanation_path, plot_path
+
+
+def load_persisted_preprocessor(artifacts_path: str) -> Any:
+    """Unpickle the preprocessor a session fitted on its whole training pool.
+
+    The same ``final.pkl`` that ``load_final_preprocessor`` reads, addressed by
+    its directory instead of by the session row: a unit receives the path as
+    runtime configuration and never sees the row. The result is only ever
+    applied, never refitted, so the rows an explanation touches are
+    transformed exactly the way the model's training data was.
+
+    Parameters
+    ----------
+    artifacts_path : str
+        ``ModelSession.preprocessing_artifacts_path``, the directory
+        ``PreprocessingJob`` wrote its pickles to.
+
+    Returns
+    -------
+    SessionPreprocessor
+        The fitted preprocessor.
+    """
+    import os
+    import pickle
+
+    with open(os.path.join(artifacts_path, "final.pkl"), "rb") as file:
+        return pickle.load(file)
