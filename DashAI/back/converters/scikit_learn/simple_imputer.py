@@ -242,7 +242,7 @@ class SimpleImputer(
 
     metadata = {
         "allowed_types": [Float, Integer, Categorical],
-        "allowed_dtypes": [],
+        "allowed_dtypes": ["float64", "float32", "int64", "int32"],
     }
 
     def __init__(self, **kwargs):
