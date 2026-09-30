@@ -9,7 +9,7 @@ to show which columns exist after every step, and session creation uses it
 to reject a chain that would reference a column that no longer exists.
 """
 
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from DashAI.back.converters.dataset_columns import plan_new_column_names
 from DashAI.back.preprocessing.column_ref import ConverterStep
@@ -151,7 +151,11 @@ def _apply_step(
     warnings.extend(delta.warnings)
     warnings.extend(_check_bounds(converter_class, converter, scope))
     if delta.drops_unscoped:
-        warnings.extend(_drop_warnings(state, scope))
+        warnings.extend(
+            _drop_warnings(
+                state, scope, getattr(converter_class, "ROWS_APPLY_TO", None)
+            )
+        )
 
     new_state, added = _apply_delta(index, state, scope, delta, taken)
     if delta.drops_unscoped:
@@ -163,15 +167,17 @@ def _apply_step(
 
 
 def _drop_warnings(
-    state: List[StateItem], scope: List[StateItem]
+    state: List[StateItem], scope: List[StateItem], rows_apply_to: Optional[str]
 ) -> List[StructureMessage]:
-    """Tell the user a step only affects training data and what it drops.
+    """Tell the user where a row-changing step applies and what it drops.
 
-    Used for a step whose output keeps only its scope (a training-only
-    resampler): validation, test and prediction rows are left as they are,
-    and every column outside its scope is gone after it.
+    Used for a step whose output keeps only its scope. A training-only
+    resampler ("train") leaves validation, test and prediction rows as they
+    are; a row remover ("splits") removes rows on every split but never at
+    prediction. Either way every column outside its scope is gone after it.
     """
-    warnings = [StructureMessage(code="train_only")]
+    first = "train_only" if rows_apply_to == "train" else "rows_removed_in_splits"
+    warnings = [StructureMessage(code=first)]
     scope_ids = {_identity(item) for item in scope}
     dropped = [
         item.name if isinstance(item, ColumnItem) else item.label

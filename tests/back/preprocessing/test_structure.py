@@ -255,3 +255,13 @@ def test_a_crashing_estimate_falls_back_to_one_unknown_block():
     (block,) = step.added
     assert (block.type, block.count) == (None, None)
     assert _names(step.state) == ["height"]
+
+
+def test_nan_remover_keeps_its_scope_and_warns_it_removes_rows_everywhere():
+    result = _infer([_step("NanRemover", [RawColumnRef(name="age")])])
+
+    step = result.steps[0]
+    assert step.status == "ok"
+    assert _names(step.state) == ["age"]
+    codes = [warning.code for warning in step.warnings]
+    assert codes == ["rows_removed_in_splits", "drops_columns"]
