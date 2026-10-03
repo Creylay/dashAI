@@ -7,21 +7,23 @@ the ``BM25VectorizerModel`` inside a ``BM25Retriever`` — against the
 component's own schema (``SCHEMA.model_validate(params)``).  A failing
 sub-component rejects the whole request with HTTP 400.
 
-Every schema field carries a ``default`` (its placeholder), so empty or
-missing params are accepted and filled with the schema defaults.  The default
-prompts (``DefaultRAGGenerationPrompt`` and ``DefaultQARAGenerationPrompt`` —
-the QA class name contains a double ``GG``) additionally accept a
-language-only ``{"language": ...}`` body: the backend injects
+The ``generation_model`` is the one component picked by name alone, so the
+backend fills its missing parameters from its schema placeholders; explicit
+values always win.  Every other component — including any nested
+sub-component such as the vectorizer inside a retriever — must arrive complete,
+so a caller sending a half-built configuration is told about it instead of
+having the gaps silently papered over.
+
+The default prompts (``DefaultRAGGenerationPrompt`` and
+``DefaultQARAGenerationPrompt`` — the QA class name contains a double ``GG``)
+accept a language-only ``{"language": ...}`` body: the backend injects
 ``template = TEMPLATES[language]`` and persists the resolved template.  Empty,
 whitespace-only or ``None`` templates are normalised the same way.  Truly
 invalid values (wrong types, out-of-range numbers, unknown enums, missing
-placeholders) are still rejected with HTTP 400.
+placeholders) are rejected with HTTP 400.
 """
 
-import pytest
 from fastapi.testclient import TestClient
-
-from tests.back.RAG.conftest import _create_test_document
 
 COMPLETE_BM25_VECTORIZER_PARAMS = {
     "strip_accents": None,
@@ -38,7 +40,7 @@ COMPLETE_BM25_VECTORIZER_PARAMS = {
 # ---------------------------------------------------------------------------
 
 
-def _complete_params(doc_id, name="strict_valid"):
+def _complete_params(name="strict_valid"):
     """Return a fully-valid RAG session payload for the given document."""
     return {
         "model_name": "RAGPipeline",
@@ -46,7 +48,6 @@ def _complete_params(doc_id, name="strict_valid"):
         "name": name,
         "description": None,
         "parameters": {
-            "documents": [doc_id],
             "chunking_model": {
                 "component": "CharacterChunkModel",
                 "params": {"chunk_size": 200, "chunk_overlap": 20},
@@ -101,22 +102,16 @@ def _bm25_retriever_ref(vectorizer_params: dict) -> dict:
     }
 
 
-@pytest.fixture(scope="module")
-def test_doc_id(client: TestClient) -> int:
-    """Module-scoped test document shared across all tests in this file."""
-    return _create_test_document(client, suffix="_strict_validation")
-
-
 # ===================================================================
 # POST  /api/v1/generative-session/
 # ===================================================================
 
 
 def test_create_session_with_empty_vectorizer_params_rejected(
-    client: TestClient, test_doc_id: int
+    client: TestClient,
 ) -> None:
     """Empty vectorizer ``params`` are rejected — backend must not fill gaps."""
-    params = _complete_params(test_doc_id, name="strict_incomplete_vectorizer")
+    params = _complete_params(name="strict_incomplete_vectorizer")
     params["parameters"]["retriever_model"]["params"]["BM25Vectorizer"]["params"] = {}
 
     response = client.post("/api/v1/generative-session/", json=params)
@@ -126,26 +121,47 @@ def test_create_session_with_empty_vectorizer_params_rejected(
     )
 
 
-def test_create_session_with_empty_generation_model_params_rejected(
-    client: TestClient, test_doc_id: int
+def test_create_session_with_empty_generation_model_params_filled(
+    client: TestClient,
 ) -> None:
-    """Empty ``Llama32_1BInstruct`` params are rejected — backend must not fill gaps."""
-    params = _complete_params(test_doc_id, name="strict_incomplete_llama")
+    """Empty generation-model params are filled from the model's own schema.
+
+    The generation model is picked by name — the creation flow asks *which*
+    model, not how to tune it — so its parameters are resolved by the backend.
+    """
+    params = _complete_params(name="strict_incomplete_llama")
     params["parameters"]["generation_model"]["params"] = {}
 
     response = client.post("/api/v1/generative-session/", json=params)
-    assert response.status_code == 400, (
-        "An empty Llama32_1BInstruct params dict must be rejected, "
-        f"got {response.status_code}: {response.text}"
+    assert response.status_code == 201, (
+        "An empty generation-model params dict should be filled with the "
+        f"schema defaults, got {response.status_code}: {response.text}"
     )
+    stored = response.json()["parameters"]["generation_model"]["params"]
+    assert stored, "the generation model's parameters were not resolved"
+    assert "context_window" in stored
+
+
+def test_create_session_with_partial_generation_model_params_kept(
+    client: TestClient,
+) -> None:
+    """Explicit generation-model values survive the default filling."""
+    params = _complete_params(name="strict_partial_llama")
+    params["parameters"]["generation_model"]["params"] = {"max_tokens": 77}
+
+    response = client.post("/api/v1/generative-session/", json=params)
+    assert response.status_code == 201, response.text
+    stored = response.json()["parameters"]["generation_model"]["params"]
+    assert stored["max_tokens"] == 77
+    assert "temperature" in stored
 
 
 def test_create_session_with_default_prompt_accepts_language_only(
-    client: TestClient, test_doc_id: int
+    client: TestClient,
 ) -> None:
     """A default prompt with only ``language`` is accepted and the injected
     template is persisted."""
-    params = _complete_params(test_doc_id, name="strict_default_prompt_language_only")
+    params = _complete_params(name="strict_default_prompt_language_only")
     params["parameters"]["prompt"] = {
         "component": "DefaultRAGGenerationPrompt",
         "params": {"language": "en"},
@@ -162,11 +178,11 @@ def test_create_session_with_default_prompt_accepts_language_only(
 
 
 def test_create_session_with_custom_prompt_no_template_rejected(
-    client: TestClient, test_doc_id: int
+    client: TestClient,
 ) -> None:
     """A custom prompt without an explicit template is rejected — backend must not
     fill gaps."""
-    params = _complete_params(test_doc_id, name="strict_custom_prompt_no_template")
+    params = _complete_params(name="strict_custom_prompt_no_template")
     params["parameters"]["prompt"] = {
         "component": "CustomRAGGenerationPrompt",
         "params": {},
@@ -179,11 +195,9 @@ def test_create_session_with_custom_prompt_no_template_rejected(
     )
 
 
-def test_create_session_with_invalid_subfield_rejected(
-    client: TestClient, test_doc_id: int
-) -> None:
+def test_create_session_with_invalid_subfield_rejected(client: TestClient) -> None:
     """A non-numeric ``temperature`` fails the recursive schema check → 400."""
-    params = _complete_params(test_doc_id, name="strict_invalid_temperature")
+    params = _complete_params(name="strict_invalid_temperature")
     params["parameters"]["generation_model"]["params"]["temperature"] = "not-a-number"
 
     response = client.post("/api/v1/generative-session/", json=params)
@@ -194,10 +208,10 @@ def test_create_session_with_invalid_subfield_rejected(
 
 
 def test_create_session_with_empty_default_prompt_template_normalized(
-    client: TestClient, test_doc_id: int
+    client: TestClient,
 ) -> None:
     """An empty default prompt template is replaced with the language template."""
-    params = _complete_params(test_doc_id, name="strict_empty_default_template")
+    params = _complete_params(name="strict_empty_default_template")
     params["parameters"]["prompt"] = {
         "component": "DefaultRAGGenerationPrompt",
         "params": {"language": "en", "template": ""},
@@ -215,10 +229,10 @@ def test_create_session_with_empty_default_prompt_template_normalized(
 
 
 def test_create_session_with_whitespace_default_prompt_template_normalized(
-    client: TestClient, test_doc_id: int
+    client: TestClient,
 ) -> None:
     """A whitespace-only default prompt template is replaced."""
-    params = _complete_params(test_doc_id, name="strict_whitespace_default_template")
+    params = _complete_params(name="strict_whitespace_default_template")
     params["parameters"]["prompt"] = {
         "component": "DefaultRAGGenerationPrompt",
         "params": {"language": "en", "template": "   "},
@@ -236,10 +250,10 @@ def test_create_session_with_whitespace_default_prompt_template_normalized(
 
 
 def test_create_session_with_null_default_prompt_template_normalized(
-    client: TestClient, test_doc_id: int
+    client: TestClient,
 ) -> None:
     """A ``None`` default prompt template is replaced."""
-    params = _complete_params(test_doc_id, name="strict_null_default_template")
+    params = _complete_params(name="strict_null_default_template")
     params["parameters"]["prompt"] = {
         "component": "DefaultRAGGenerationPrompt",
         "params": {"language": "en", "template": None},
@@ -257,10 +271,10 @@ def test_create_session_with_null_default_prompt_template_normalized(
 
 
 def test_create_session_with_custom_prompt_missing_placeholders_rejected(
-    client: TestClient, test_doc_id: int
+    client: TestClient,
 ) -> None:
     """A custom prompt template lacking the required placeholders → 400."""
-    params = _complete_params(test_doc_id, name="strict_custom_prompt_no_placeholders")
+    params = _complete_params(name="strict_custom_prompt_no_placeholders")
     params["parameters"]["prompt"] = {
         "component": "CustomRAGGenerationPrompt",
         "params": {"template": "hello"},
@@ -274,11 +288,11 @@ def test_create_session_with_custom_prompt_missing_placeholders_rejected(
 
 
 def test_create_session_with_default_prompt_missing_language_rejected(
-    client: TestClient, test_doc_id: int
+    client: TestClient,
 ) -> None:
     """A default prompt without ``language`` is rejected — backend needs language to
     inject template."""
-    params = _complete_params(test_doc_id, name="strict_default_prompt_no_language")
+    params = _complete_params(name="strict_default_prompt_no_language")
     params["parameters"]["prompt"] = {
         "component": "DefaultRAGGenerationPrompt",
         "params": {},
@@ -300,9 +314,9 @@ class TestUpdateStrictValidation:
     """Strict validation on parameter updates via PUT."""
 
     @staticmethod
-    def _create_session(client: TestClient, test_doc_id: int, name: str) -> dict:
+    def _create_session(client: TestClient, name: str) -> dict:
         """Create a fully-valid session and return its JSON response."""
-        params = _complete_params(test_doc_id, name=name)
+        params = _complete_params(name=name)
         response = client.post("/api/v1/generative-session/", json=params)
         assert response.status_code == 201, (
             f"Session prereq failed: {response.status_code}: {response.text}"
@@ -310,13 +324,11 @@ class TestUpdateStrictValidation:
         return response.json()
 
     def test_update_parameters_rejects_incomplete_vectorizer(
-        self, client: TestClient, test_doc_id: int
+        self, client: TestClient
     ) -> None:
         """PUT with an empty vectorizer params dict is rejected — backend must not
         fill gaps."""
-        session = self._create_session(
-            client, test_doc_id, "strict_update_incomplete_vectorizer"
-        )
+        session = self._create_session(client, "strict_update_incomplete_vectorizer")
 
         response = client.put(
             f"/api/v1/generative-session/{session['id']}/parameters",
@@ -328,12 +340,10 @@ class TestUpdateStrictValidation:
         )
 
     def test_update_parameters_accepts_complete_vectorizer(
-        self, client: TestClient, test_doc_id: int
+        self, client: TestClient
     ) -> None:
         """PUT with a complete vectorizer is accepted and persisted as-is."""
-        session = self._create_session(
-            client, test_doc_id, "strict_update_complete_vectorizer"
-        )
+        session = self._create_session(client, "strict_update_complete_vectorizer")
 
         response = client.put(
             f"/api/v1/generative-session/{session['id']}/parameters",
@@ -353,11 +363,11 @@ class TestUpdateStrictValidation:
         assert saved == COMPLETE_BM25_VECTORIZER_PARAMS
 
     def test_update_parameters_normalizes_nested_vectorizer_types(
-        self, client: TestClient, test_doc_id: int
+        self, client: TestClient
     ) -> None:
         """PUT with integer ``max_df``/``min_df`` persists them as floats."""
         session = self._create_session(
-            client, test_doc_id, "strict_update_vectorizer_type_normalization"
+            client, "strict_update_vectorizer_type_normalization"
         )
         vectorizer_params = {
             "strip_accents": None,
@@ -385,11 +395,11 @@ class TestUpdateStrictValidation:
         assert saved["min_df"] == 0.0
 
     def test_update_parameters_with_default_prompt_accepts_language_only(
-        self, client: TestClient, test_doc_id: int
+        self, client: TestClient
     ) -> None:
         """PUT with a default prompt language-only body injects the template."""
         session = self._create_session(
-            client, test_doc_id, "strict_update_default_prompt_language_only"
+            client, "strict_update_default_prompt_language_only"
         )
 
         response = client.put(
@@ -410,12 +420,10 @@ class TestUpdateStrictValidation:
         assert "{chunks}" in template
 
     def test_update_parameters_normalizes_empty_default_prompt_template(
-        self, client: TestClient, test_doc_id: int
+        self, client: TestClient
     ) -> None:
         """PUT with an empty default prompt template replaces it."""
-        session = self._create_session(
-            client, test_doc_id, "strict_update_empty_default_template"
-        )
+        session = self._create_session(client, "strict_update_empty_default_template")
 
         response = client.put(
             f"/api/v1/generative-session/{session['id']}/parameters",
@@ -436,7 +444,7 @@ class TestUpdateStrictValidation:
         assert "{chunks}" in template
 
     def test_update_parameters_rejects_prompt_id_of_schema_invalid_prompt(
-        self, client: TestClient, test_doc_id: int
+        self, client: TestClient
     ) -> None:
         """A ``prompt_id`` whose resolved prompt is schema-invalid → 400.
 
@@ -460,9 +468,7 @@ class TestUpdateStrictValidation:
         )
         prompt_id = prompt_resp.json()["id"]
 
-        session = self._create_session(
-            client, test_doc_id, "strict_update_schema_invalid_prompt_id"
-        )
+        session = self._create_session(client, "strict_update_schema_invalid_prompt_id")
 
         response = client.put(
             f"/api/v1/generative-session/{session['id']}/parameters",

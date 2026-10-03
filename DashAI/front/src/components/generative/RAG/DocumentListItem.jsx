@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Box, Typography, useTheme } from "@mui/material";
+import { Box, Chip, Typography, useTheme } from "@mui/material";
 import {
   Description,
   PictureAsPdf,
@@ -30,12 +30,19 @@ const getDocumentIcon = (fileType) => {
  * @param {object}  props.document - The document object ({ id, name, type, ... }).
  * @param {boolean} [props.disabled=false] - Whether the item is greyed out and non-interactive.
  * @param {function} [props.onClick] - Click handler for the item.
+ * @param {object}  [props.indexState] - This document's indexing state within
+ *   the session (`{ chunks, indexed }`), as reported by the backend.
+ * @param {node}    [props.actions] - Controls revealed on hover, at the end of
+ *   the row. They stop their own clicks, so acting on a row does not also
+ *   trigger the row itself.
  * @returns {JSX.Element}
  */
 export default function DocumentListItem({
   document,
   disabled = false,
   onClick,
+  indexState,
+  actions,
 }) {
   const { t } = useTranslation(["generative"]);
   const [isHovered, setIsHovered] = useState(false);
@@ -125,16 +132,67 @@ export default function DocumentListItem({
             {document.name}
           </Typography>
         </Box>
-        <Typography
-          variant="caption"
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: disabled ? "text.disabled" : "text.secondary",
+              textTransform: "uppercase",
+            }}
+          >
+            {document.type || t("generative:rag.documents.table.unknownType")}
+          </Typography>
+          {indexState && (
+            <Chip
+              size="small"
+              variant="outlined"
+              color={
+                indexState.indexing
+                  ? "info"
+                  : indexState.indexed
+                    ? "success"
+                    : "default"
+              }
+              label={
+                // Indexing wins over the chunk count: those chunks belong to
+                // the configuration being replaced, so showing them as ready
+                // would promise an answer the pipeline cannot give yet.
+                indexState.indexing
+                  ? t("generative:rag.index.indexing")
+                  : indexState.indexed
+                    ? t("generative:rag.index.chunkCount", {
+                        count: indexState.chunks,
+                      })
+                    : t("generative:rag.index.notIndexed")
+              }
+              sx={{
+                height: 18,
+                "& .MuiChip-label": { px: 0.75, fontSize: 10 },
+              }}
+            />
+          )}
+        </Box>
+      </Box>
+
+      {actions && (
+        <Box
+          onClick={(event) => event.stopPropagation()}
           sx={{
-            color: disabled ? "text.disabled" : "text.secondary",
-            textTransform: "uppercase",
+            display: "flex",
+            alignItems: "center",
+            flexShrink: 0,
+            // Kept mounted so the row does not reflow when the mouse arrives,
+            // and faded rather than hidden: `visibility: hidden` would drop
+            // these controls out of the tab order, and with the documents page
+            // gone there is no other way to reach them without a mouse.
+            opacity: isHovered ? 1 : 0,
+            transition: "opacity 0.2s",
+            "&:focus-within": { opacity: 1 },
           }}
         >
-          {document.type || t("generative:rag.documents.table.unknownType")}
-        </Typography>
-      </Box>
+          {actions}
+        </Box>
+      )}
     </Box>
   );
 }

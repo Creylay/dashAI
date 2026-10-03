@@ -24,13 +24,32 @@ import NewPipelineWrapper from "./pages/pipelines/newPipelineWrapper";
 import HubContent from "./pages/hub/HubContent";
 import HubImportPage from "./pages/hub/HubImportPage";
 import JobQueueWidget from "./components/jobs/JobQueueWidget";
-import RAGDocumentsPage from "./pages/generative/RAG/RAGDocumentsPage";
-import RAGPromptsPage from "./pages/generative/RAG/RAGPromptsPage";
+import RAGCreatePage from "./pages/generative/RAG/RAGCreatePage";
 import RAGSessionPage from "./pages/generative/RAGSession/RAGSessionPage";
 import SessionRouter from "./pages/generative/SessionRouter";
 import { DatasetsAndNotebooksProvider } from "./components/custom/contexts/DatasetsAndNotebooksContext";
 import { DatasetsProvider } from "./contexts/DatasetsContext";
 import { ModelsProvider } from "./components/models/ModelsContext";
+import { RAG_TASK_NAME } from "./api/rag";
+
+/**
+ * Scopes a RAG route to its own session list.
+ *
+ * The app-level provider serves the shared "create session" flow, which must
+ * not see RAG sessions; RAG routes get a provider of their own asking the
+ * backend for exactly its task.
+ *
+ * @param {object} props
+ * @param {JSX.Element} props.children - The RAG page to render.
+ * @returns {JSX.Element} The scoped subtree.
+ */
+function RAGScope({ children }) {
+  return (
+    <GenerativeProvider sessionFilter={{ taskName: RAG_TASK_NAME }}>
+      {children}
+    </GenerativeProvider>
+  );
+}
 
 function DataSectionLayout() {
   return (
@@ -88,27 +107,45 @@ function App() {
                   element={<ModelsPage />}
                 />
                 <Route path="/app/generative" element={<Generative />} />
+                {/* RAG is an entry point of the Generative module, not a step
+                    inside session creation, and the entry point *is* creating a
+                    session: picking RAG used to land on a menu whose only card
+                    was "new session", so starting one took two clicks. Existing
+                    sessions are one click away in the left panel, which its own
+                    provider scopes to RAG so the shared list stays separate.
+                    Route matching is case-insensitive, so the previous
+                    /app/generative/RAG/... links keep working. */}
                 <Route
-                  path="/app/generative/RAG"
+                  path="/app/generative/rag"
                   element={
-                    <Navigate to="/app/generative/sessions/new" replace />
+                    <RAGScope>
+                      <RAGCreatePage />
+                    </RAGScope>
                   }
                 />
                 <Route
-                  path="/app/generative/RAG/documents"
-                  element={
-                    <GenerativeProvider>
-                      <RAGDocumentsPage />
-                    </GenerativeProvider>
-                  }
+                  path="/app/generative/rag/new"
+                  element={<Navigate to="/app/generative/rag" replace />}
                 />
                 <Route
-                  path="/app/generative/RAG/prompts"
+                  path="/app/generative/rag/sessions/:id"
                   element={
-                    <GenerativeProvider>
-                      <RAGPromptsPage />
-                    </GenerativeProvider>
+                    <RAGScope>
+                      <RAGSessionPage />
+                    </RAGScope>
                   }
+                />
+                {/* Documents and prompts belong to a session now, so these
+                    two pages are gone. There is no catch-all route, so keep the
+                    paths redirecting for a release rather than serving a blank
+                    page to anyone who bookmarked them. */}
+                <Route
+                  path="/app/generative/rag/documents"
+                  element={<Navigate to="/app/generative/rag" replace />}
+                />
+                <Route
+                  path="/app/generative/rag/prompts"
+                  element={<Navigate to="/app/generative/rag" replace />}
                 />
                 <Route
                   path="/app/generative/sessions/new"

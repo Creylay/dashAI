@@ -9,11 +9,13 @@ import { checkHowManyOptimazers } from "../../utils/schema";
 import { isRunActive } from "../../utils/runStatus";
 import { useModels } from "./ModelsContext";
 import useRunResultsData from "./runResults/useRunResultsData";
-import ResultsTabsHeader from "./runResults/ResultsTabsHeader";
+import ResultsTabsHeader, { REPORTS_TAB } from "./runResults/ResultsTabsHeader";
 import ExplainerResultsTab from "./runResults/ExplainerResultsTab";
 import PredictionResultsTab from "./runResults/PredictionResultsTab";
+import ReportResultsTab from "./runResults/ReportResultsTab";
 import FoldMetricsChart from "./FoldMetricsChart";
 import OuterFoldMetricsTable from "./OuterFoldMetricsTable";
+import { getReports } from "../../api/report";
 
 // A session whose splitter is "none" (clustering) trains on the whole dataset
 // and has no held-out rows to predict on, so it never offers a predictions tab.
@@ -97,6 +99,23 @@ export default function RunResults({
   const [explainerScrollParent, setExplainerScrollParent] = useState(null);
   const [showDatasetPanel, setShowDatasetPanel] = useState(false);
 
+  const modelsContext = useModels();
+
+  // Only the count is held here, for the tab chip; the tab body owns the rows.
+  const [reportCount, setReportCount] = useState(0);
+  const reportRefreshTrigger = modelsContext?.reportRefreshTrigger;
+  useEffect(() => {
+    let cancelled = false;
+    getReports(run.id)
+      .then((rows) => {
+        if (!cancelled) setReportCount(rows.length);
+      })
+      .catch((error) => console.error("Error counting reports:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [run.id, reportRefreshTrigger]);
+
   const optimizables = checkHowManyOptimazers({ params: run.parameters });
   const isFinished = run.status === 3;
   const isRunning = isRunActive(run.status);
@@ -132,11 +151,11 @@ export default function RunResults({
   // Expose the active tab while this run is shown full screen, so the right
   // sidebar can swap its content (e.g. list explainers on the explainers tab).
   const params = useParams();
-  const modelsContext = useModels();
   const setRunDetailTab = modelsContext?.setRunDetailTab;
   const isDetailView = String(params.runId ?? "") === String(run.id);
   useEffect(() => {
-    if (activeTab === 2 && !supportsPredictions) setActiveTab(0);
+    if ((activeTab === 2 || activeTab === REPORTS_TAB) && !supportsPredictions)
+      setActiveTab(0);
   }, [activeTab, supportsPredictions]);
 
   useEffect(() => {
@@ -154,6 +173,7 @@ export default function RunResults({
       explainerCount={globalExplainers.length + localExplainers.length}
       predictionCount={predictions.length}
       supportsPredictions={supportsPredictions}
+      reportCount={reportCount}
       run={run}
     />
   );
@@ -217,6 +237,14 @@ export default function RunResults({
         <Box sx={{ pb: 4 }}>
           <OuterFoldMetricsTable run={run} />
         </Box>
+      )}
+
+      {activeTab === REPORTS_TAB && isFinished && supportsPredictions && (
+        <ReportResultsTab
+          run={run}
+          session={session}
+          refreshTrigger={reportRefreshTrigger}
+        />
       )}
     </>
   );

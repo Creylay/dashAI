@@ -29,6 +29,7 @@ export default function DatasetPredictionPanel({
 }) {
   const [datasets, setDatasets] = useState([]);
   const [selectedDataset, setSelectedDataset] = useState(null);
+  const [selectedSplit, setSelectedSplit] = useState("all");
   const [modelSession, setModelSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -91,7 +92,11 @@ export default function DatasetPredictionPanel({
 
     setIsSubmitting(true);
     try {
-      const prediction = await createPrediction(run.id, selectedDataset.id);
+      const prediction = await createPrediction(
+        run.id,
+        selectedDataset.id,
+        selectedSplit !== "all" ? selectedSplit : null,
+      );
       const jobResponse = await enqueuePredictionJob(prediction.id);
 
       if (!jobResponse || !jobResponse.id) {
@@ -139,11 +144,14 @@ export default function DatasetPredictionPanel({
         },
         async (result) => {
           console.error("Prediction job failed:", result);
+          const wasCancelled = result?.status === "cancelled";
           enqueueSnackbar(
-            t("prediction:error.predictionFailed", {
-              error: result.error || t("common:unknownError"),
-            }),
-            { variant: "error" },
+            wasCancelled
+              ? t("common:jobQueue.jobCancelled")
+              : t("prediction:error.predictionFailed", {
+                  error: result.error || t("common:unknownError"),
+                }),
+            { variant: wasCancelled ? "info" : "error" },
           );
 
           try {
@@ -190,6 +198,8 @@ export default function DatasetPredictionPanel({
         datasets={datasets}
         selectedDataset={selectedDataset}
         setSelectedDataset={setSelectedDataset}
+        runId={run.id}
+        onSplitChange={setSelectedSplit}
         actionSlot={
           <Button
             variant="outlined"

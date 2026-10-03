@@ -13,6 +13,7 @@ from DashAI.back.core.schema_fields import (
     schema_field,
 )
 from DashAI.back.core.utils import MultilingualString
+from DashAI.back.splitters.rules import SEED_ONLY_MATTERS_WHEN_SHUFFLING
 
 from .fold_splitter import FoldSplitter, sklearn_random_state
 
@@ -43,26 +44,11 @@ class StratifiedKFoldSplitterSchema(BaseSchema):
         bool_field(),
         placeholder=True,
         description=MultilingualString(
-            en=(
-                "Whether to shuffle the data before splitting it into folds. When "
-                "shuffling is disabled, the random state has no effect."
-            ),
-            es=(
-                "Si se deben mezclar los datos antes de dividirlos en particiones. "
-                "Cuando la mezcla está desactivada, el estado aleatorio no tiene "
-                "efecto."
-            ),
-            pt=(
-                "Se os dados devem ser embaralhados antes de dividi-los em partições. "
-                "Quando o embaralhamento está desativado, o estado aleatório não tem "
-                "efeito."
-            ),
-            de=(
-                "Ob die Daten vor der Aufteilung in Folds gemischt werden sollen. "
-                "Wenn das Mischen deaktiviert ist, hat der Zufallszustand keine "
-                "Wirkung."
-            ),
-            zh="划分为折之前是否打乱数据。关闭打乱时，随机状态不起作用。",
+            en=("Whether to shuffle the data before splitting it into folds."),
+            es=("Si se deben mezclar los datos antes de dividirlos en particiones."),
+            pt=("Se os dados devem ser embaralhados antes de dividi-los em partições."),
+            de=("Ob die Daten vor der Aufteilung in Folds gemischt werden sollen."),
+            zh="划分为折之前是否打乱数据。",
         ),
         alias=MultilingualString(
             en="Shuffle", es="Mezclar", pt="Embaralhar", de="Mischen", zh="打乱"
@@ -72,24 +58,11 @@ class StratifiedKFoldSplitterSchema(BaseSchema):
         int_field(ge=0),
         placeholder=42,
         description=MultilingualString(
-            en=(
-                "Seed used to make the split reproducible when shuffle is enabled. It "
-                "is ignored when shuffling is disabled."
-            ),
-            es=(
-                "Semilla utilizada para que la división sea reproducible cuando se "
-                "activa la mezcla. Se ignora cuando la mezcla está desactivada."
-            ),
-            pt=(
-                "Semente usada para tornar a divisão reproduzível quando o "
-                "embaralhamento está ativado. É ignorada quando o embaralhamento está "
-                "desativado."
-            ),
-            de=(
-                "Seed, um die Aufteilung reproduzierbar zu machen, wenn Mischen "
-                "aktiviert ist. Wird ignoriert, wenn das Mischen deaktiviert ist."
-            ),
-            zh="启用打乱时，用于使划分可复现的随机种子。关闭打乱时将被忽略。",
+            en=("Seed used to make the split reproducible."),
+            es=("Semilla utilizada para que la división sea reproducible."),
+            pt=("Semente usada para tornar a divisão reproduzível."),
+            de=("Seed, um die Aufteilung reproduzierbar zu machen."),
+            zh="用于使划分可复现的随机种子。",
         ),
         alias=MultilingualString(
             en="Random state",
@@ -158,6 +131,10 @@ class StratifiedKFoldSplitterSchema(BaseSchema):
         ),
     )  # type: ignore
 
+    # The same dependency as every other splitter that takes a seed, declared
+    # once in splitters/rules.py instead of copied here.
+    rules = [SEED_ONLY_MATTERS_WHEN_SHUFFLING]
+
 
 class StratifiedKFoldSplitter(FoldSplitter):
     """Splitter that generates folds while preserving the class distribution.
@@ -190,6 +167,44 @@ class StratifiedKFoldSplitter(FoldSplitter):
     )
     COMPATIBLE_INNER_SPLITTERS = ["KFoldSplitter", "StratifiedKFoldSplitter"]
     SCHEMA = StratifiedKFoldSplitterSchema
+    DESCRIPTION = MultilingualString(
+        en=(
+            "K folds that each keep the class balance of the full "
+            "dataset. Use it when a class is rare enough that an ordinary "
+            "fold could miss it entirely. Stratifying changes which rows "
+            "land in each fold, not how many, and the rows held out of "
+            "the folds keep that same balance."
+        ),
+        es=(
+            "K pliegues que conservan el balance de clases del conjunto "
+            "completo. Usalo cuando una clase es tan poco frecuente que "
+            "un pliegue corriente podria no contener ninguna de sus "
+            "filas. Estratificar cambia que filas caen en cada pliegue, "
+            "no cuantas, y las filas reservadas fuera de los pliegues "
+            "conservan ese mismo balance."
+        ),
+        pt=(
+            "K dobras que mantem o balanco de classes do conjunto "
+            "completo. Use quando uma classe e rara o bastante para que "
+            "uma dobra comum possa nao conter nenhuma de suas linhas. "
+            "Estratificar muda quais linhas caem em cada dobra, nao "
+            "quantas, e as linhas reservadas fora das dobras mantem esse "
+            "mesmo balanco."
+        ),
+        de=(
+            "K Folds, die jeweils die Klassenverteilung des gesamten "
+            "Datensatzes beibehalten. Sinnvoll, wenn eine Klasse so "
+            "selten ist, dass ein gewoehnlicher Fold sie ganz verfehlen "
+            "koennte. Stratifizieren aendert, welche Zeilen in welchen "
+            "Fold fallen, nicht wie viele, und die zurueckgelegten Zeilen "
+            "behalten dieselbe Verteilung."
+        ),
+        zh=(
+            "k 个折都保持完整数据集的类别比例。当某一类别罕见到普通"
+            "切分可能完全遗漏它时使用。分层改变的是哪些行落入每一折，"
+            "而不是有多少行，预留出来的行也保持同样的比例。"
+        ),
+    )
 
     def split_indexes(
         self, x: DashAIDataset, y: DashAIDataset

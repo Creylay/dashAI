@@ -4,6 +4,7 @@ import numpy as np
 from kink import di
 
 from DashAI.back.core.enums.metrics import LevelEnum, SplitEnum
+from DashAI.back.core.utils import MultilingualString
 from DashAI.back.dependencies.database.models import Metric, Run
 from DashAI.back.evaluation.base_evaluation_strategy import BaseEvaluationStrategy
 from DashAI.back.splitters.base_splitter import BaseSplitter
@@ -209,6 +210,28 @@ class FoldEvaluationStrategy(BaseEvaluationStrategy):
                 else {}
             )
             validation_scores = model.compute_metrics(split=SplitEnum.VALIDATION)
+
+            # The goal metric can be missing from the fold's scores: either it
+            # is not among the validation metrics chosen for the run, or it
+            # scored a non-finite value and was dropped. Neither is a fold to
+            # skip -- the objective would then be the mean of a different set of
+            # folds on each trial, and those means are not comparable -- so name
+            # what is missing and stop.
+            #
+            # RuntimeError and not ValueError on purpose: `study.optimize` runs
+            # with `catch=UNFITTABLE_TRIAL_ERRORS`, which includes ValueError,
+            # so a ValueError raised here would be swallowed into "all N trials
+            # failed, narrow the ranges and try again" -- the wrong advice for a
+            # run whose optimization metric was never computed.
+            if metric.__name__ not in validation_scores:
+                scored = ", ".join(sorted(validation_scores)) or "none"
+                raise RuntimeError(
+                    f"Fold {i} produced no value for the optimization metric "
+                    f"'{metric.__name__}'. Metrics scored on this fold: "
+                    f"{scored}. Check that this metric is selected as a "
+                    f"validation metric for the run, and that it is defined "
+                    f"for the fold's data."
+                )
 
             # Collect the goal metric value from this fold
             folds_results.append(validation_scores[metric.__name__])
@@ -424,6 +447,41 @@ class CrossValidationEvaluationStrategy(FoldEvaluationStrategy):
     ``ForecastingTask``, whose folds have no in-sample score to report;
     ``ForecastingCrossValidationEvaluationStrategy`` handles that.
     """
+
+    DESCRIPTION = MultilingualString(
+        en=(
+            "Cross validation cuts the dataset into folds. Each fold takes a "
+            "turn as the validation set while the model trains on the rest, and "
+            "the scores are averaged, so the result leans less on any single "
+            "cut."
+        ),
+        es=(
+            "La validacion cruzada corta el conjunto en pliegues. Cada pliegue "
+            "actua por turno como conjunto de validacion mientras el modelo "
+            "entrena con el resto, y los puntajes se promedian, asi el resultado "
+            "depende menos de un solo corte."
+        ),
+        pt=(
+            "A validacao cruzada corta o conjunto em dobras. Cada dobra serve "
+            "por vez como conjunto de validacao enquanto o modelo treina no "
+            "resto, e as pontuacoes sao promediadas, entao o resultado depende "
+            "menos de um unico corte."
+        ),
+        de=(
+            "Die Kreuzvalidierung teilt den Datensatz in Folds. Jeder Fold dient "
+            "reihum als Validierungsmenge, waehrend das Modell auf dem Rest "
+            "trainiert, und die Ergebnisse werden gemittelt, sodass das Resultat "
+            "weniger von einer einzelnen Teilung abhaengt."
+        ),
+        zh=(
+            "交叉验证把数据集切成"
+            "若干折。每一折轮流作为"
+            "验证集，模型在其余部分"
+            "上训练，最后取平均分，"
+            "因此结果不那么依赖某"
+            "一次切分。"
+        ),
+    )
 
     COMPATIBLE_COMPONENTS = [
         "TabularClassificationTask",

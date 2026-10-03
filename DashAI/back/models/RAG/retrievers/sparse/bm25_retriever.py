@@ -10,6 +10,8 @@ from sklearn.metrics.pairwise import pairwise_distances
 
 from DashAI.back.core.schema_fields import (
     BaseSchema,
+    Check,
+    Lte,
     bool_field,
     component_field,
     enum_field,
@@ -21,8 +23,8 @@ from DashAI.back.core.schema_fields import (
     string_field,
 )
 from DashAI.back.core.utils import MultilingualString
-from DashAI.back.models.base_model import BaseModel
 from DashAI.back.models.RAG.documents import Chunk
+from DashAI.back.models.RAG.retrievers.sparse.base_vectorizer import BaseVectorizer
 from DashAI.back.models.RAG.retrievers.sparse.sparse_retriever import SparseRetriever
 
 log = logging.getLogger(__name__)
@@ -114,9 +116,33 @@ class BM25VectorizerSchema(BaseSchema):
         ),
     )  # type: ignore
 
+    # A range the underlying library takes as one tuple, which the schema
+    # cannot express, so it is split into two fields. sklearn raises "max_df corresponds
+    # to < documents than min_df"; equal proportions are fine.
+    rules = [
+        Check(
+            Lte("min_df", "max_df"),
+            id="bm25.document_frequency_is_ordered",
+            targets=["min_df", "max_df"],
+            message=MultilingualString(
+                en="The minimum document frequency cannot be greater than the maximum.",
+                es=(
+                    "La frecuencia mínima de documento no puede ser mayor que la "
+                    "máxima."
+                ),
+                pt="A frequência mínima de documento não pode ser maior que a máxima.",
+                de=(
+                    "Die minimale Dokumentfrequenz darf nicht größer als die maximale "
+                    "sein."
+                ),
+                zh="最小文档频率不能大于最大值。",
+            ),
+        ),
+    ]
 
-class BM25VectorizerModel(BaseModel):
-    """Model component that encapsulates a :class:`CountVectorizer` for BM25.
+
+class BM25VectorizerModel(BaseVectorizer):
+    """Component that encapsulates a :class:`CountVectorizer` for BM25.
 
     The vectorizer provides term-frequency counts; the BM25 weighting
     is applied by the parent :class:`BM25Retriever`.
@@ -159,15 +185,6 @@ class BM25VectorizerModel(BaseModel):
             min_df=self.params.pop("min_df"),
             max_features=self.params.pop("max_features"),
         )
-
-    def load(self):
-        """No-op load (state managed by the parent retriever)."""
-
-    def save(self):
-        """No-op save (state managed by the parent retriever)."""
-
-    def train(self):
-        """No-op train (fitting is done by the parent retriever)."""
 
 
 class BM25RetrieverSchema(BaseSchema):

@@ -1,5 +1,6 @@
 {
   "actions": "Ações",
+  "copy": "Copiar",
   "holdout": "Reservado",
   "hub": "Hub",
   "add": "Adicionar",
@@ -28,9 +29,8 @@
     "confirmDelete": "Excluir os arquivos baixados de {{name}}? Você poderá baixá-lo novamente mais tarde.",
     "delete": "Remover download",
     "deleted": "Download removido",
-    "deleteWithSize": "Remover download ({{size}})",
     "done": "Componente baixado",
-    "download": "Baixar ({{size}})",
+    "download": "Baixar",
     "downloading": "Baixando...",
     "failed": "Falha ao baixar o componente",
     "mustDownload": "Este modelo precisa ser baixado antes de usar",
@@ -114,6 +114,7 @@
     "confirmClearAll": "Tem certeza de que deseja excluir TODOS os trabalhos registrados?",
     "confirmClearAllDetail": "Isso cancelará todos os trabalhos da fila.",
     "confirmDeleteJob": "Tem certeza de que deseja excluir este trabalho?",
+    "confirmCancelJob": "Tem certeza de que deseja cancelar este trabalho?",
     "deleteJob": "Excluir trabalho",
     "details": {
       "errorMessage": "Mensagem de erro",
@@ -130,7 +131,9 @@
       "running": "Em execução",
       "completed": "Concluído",
       "failed": "Com falha",
-      "deleted": "Excluído"
+      "deleted": "Excluído",
+      "cancelled": "Cancelado",
+      "killed": "Interrompido"
     },
     "failedCount_one": "{{count}} com falha",
     "failedCount_many": "{{count}} com falha",
@@ -139,6 +142,7 @@
     "noActiveJobs": "Não há trabalhos ativos",
     "noCompletedJobs": "Não há trabalhos concluídos",
     "cancelJob": "Cancelar trabalho",
+    "jobCancelled": "O trabalho foi cancelado.",
     "noJobs": "Não há trabalhos na fila",
     "refresh": "Atualizar",
     "relativeTime": {

@@ -11,6 +11,7 @@ from sqlalchemy import exc
 from DashAI.back.dependencies.database.models import Dataset, ModelSession, Prediction
 from DashAI.back.job.base_job import BaseJob, JobError
 from DashAI.back.models.base_model import BaseModel
+from DashAI.back.splitters.splits_payload import run_split_indexes
 from DashAI.back.tasks.base_task import BaseTask
 from DashAI.back.tasks.regression_task import RegressionTask
 
@@ -30,8 +31,35 @@ def _run_prediction_pipeline(
     loaded_dataset: "DashAIDataset",
     model_session: ModelSession,
 ) -> Tuple["DashAIDataset", Any]:
-    """Run shared prediction steps from prepared input data to final predictions."""
+    """Run shared prediction steps from prepared input data to final predictions.
+
+    Parameters
+    ----------
+    task : BaseTask
+        The task the run belongs to.
+    trained_model : BaseModel
+        The model loaded from the run.
+    train_dataset : DashAIDataset
+        The dataset the model was trained on, for type and label information.
+    loaded_dataset : DashAIDataset
+        The rows to predict.
+    model_session : ModelSession
+        The session declaring the input and output columns.
+
+    Returns
+    -------
+    tuple
+        The prepared inputs and the predictions for them.
+    """
     import numpy as np
+
+    if model_session.preprocessing and model_session.preprocessing.get("steps"):
+        from DashAI.back.preprocessing.session_preprocessor import (
+            load_final_preprocessor,
+        )
+
+        preprocessor = load_final_preprocessor(model_session)
+        loaded_dataset = preprocessor.transform_dataset(loaded_dataset)
 
     prepared_dataset = loaded_dataset.select_columns(model_session.input_columns)
     y_pred_proba = np.array(trained_model.predict(prepared_dataset))
@@ -411,12 +439,31 @@ class PredictJob(BaseJob):
                     f"{dataset_trained.file_path}/dataset/"
                 ) from e
 
+            row_indexes = None
+            if prediction.split and dataset_id == model_session.dataset_id:
+                try:
+                    row_indexes = run_split_indexes(
+                        model_session.splits,
+                        prediction.run.split_indexes,
+                        component_registry,
+                        prediction.split,
+                    )
+                except ValueError as e:
+                    prediction.set_status_as_error()
+                    db.commit()
+                    log.exception(e)
+                    raise JobError(
+                        f"Cannot predict on the {prediction.split} split: {e}"
+                    ) from e
+
             try:
                 # Load or create prediction dataset
                 if dataset_id:
                     loaded_dataset: "DashAIDataset" = load_dataset(
                         str(Path(f"{dataset.file_path}/dataset/"))
                     )
+                    if row_indexes is not None:
+                        loaded_dataset = loaded_dataset.select(row_indexes)
                 else:
                     dataset_trained_path = str(
                         Path(f"{dataset_trained.file_path}/dataset/")
@@ -438,16 +485,12 @@ class PredictJob(BaseJob):
                 prediction.set_status_as_error()
                 db.commit()
                 log.error(f"Validation Error: {ve}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid input data: {str(ve)}",
-                ) from ve
+                raise JobError(f"Invalid input data: {ve}") from ve
             except TypeError as te:
+                prediction.set_status_as_error()
+                db.commit()
                 log.error(f"Type Error: {te}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Type validation failed: {str(te)}",
-                ) from te
+                raise JobError(f"Type validation failed: {te}") from te
             except Exception as e:
                 prediction.set_status_as_error()
                 db.commit()

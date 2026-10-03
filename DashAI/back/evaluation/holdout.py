@@ -1,4 +1,5 @@
 from DashAI.back.core.enums.metrics import LevelEnum, SplitEnum
+from DashAI.back.core.utils import MultilingualString
 from DashAI.back.dependencies.database.models import Metric, Run
 from DashAI.back.evaluation.base_evaluation_strategy import BaseEvaluationStrategy
 
@@ -156,10 +157,7 @@ class SinglePartitionEvaluationStrategy(BaseEvaluationStrategy):
             output_dataset["validation"], is_fit=False
         )
 
-        # Calculate metric for train and validation data each trial. The
-        # training partition is skipped for a strategy that does not score it,
-        # which for a forecaster is not a preference: predicting on dates it
-        # was fitted on is refused, so asking would fail every trial.
+        # Calculate metric for train and validation data each trial.
         if SplitEnum.TRAIN in self.SCORED_SPLITS:
             model.calculate_metrics(split=SplitEnum.TRAIN, level=LevelEnum.TRIAL)
         model.calculate_metrics(split=SplitEnum.VALIDATION, level=LevelEnum.TRIAL)
@@ -175,10 +173,44 @@ class HoldoutEvaluationStrategy(SinglePartitionEvaluationStrategy):
 
     The ordinary holdout evaluation. Not offered for ``ForecastingTask``:
     scoring the training partition of a forecaster means predicting on dates
-    it was fitted on, and keeping validation out of the final fit throws away
-    the most recent history right before asking what comes next.
-    ``ForecastingHoldoutEvaluationStrategy`` handles both.
+    it was fitted on, which is a fit statistic rather than a forecast and does
+    not belong in the same results table as one.
+    ``ForecastingHoldoutEvaluationStrategy`` records validation and test only.
+
+    The final fit is the same in both: the kept model is fitted on the training
+    partition alone, so it is the model the recorded metrics describe.
     """
+
+    DESCRIPTION = MultilingualString(
+        en=(
+            "Holdout cuts the dataset once. The model trains on one part and is "
+            "scored on rows it never saw. Fast, but the score depends on which "
+            "rows happened to land where."
+        ),
+        es=(
+            "Holdout corta el conjunto una sola vez. El modelo entrena con una "
+            "parte y se evalua con filas que nunca vio. Es rapido, pero el "
+            "resultado depende de que filas cayeron en cada parte."
+        ),
+        pt=(
+            "O holdout corta o conjunto uma unica vez. O modelo treina em uma "
+            "parte e e avaliado em linhas que nunca viu. E rapido, mas o "
+            "resultado depende de quais linhas cairam em cada parte."
+        ),
+        de=(
+            "Holdout teilt den Datensatz ein einziges Mal. Das Modell trainiert "
+            "auf einem Teil und wird auf Zeilen bewertet, die es nie gesehen "
+            "hat. Schnell, aber das Ergebnis haengt davon ab, welche Zeilen wo "
+            "gelandet sind."
+        ),
+        zh=(
+            "留出法只切分数据集一次。"
+            "模型在一部分上训练，"
+            "并在从未见过的行上评分。"
+            "速度快，但结果取决于"
+            "哪些行落在了哪一部分。"
+        ),
+    )
 
     COMPATIBLE_COMPONENTS = [
         "TabularClassificationTask",

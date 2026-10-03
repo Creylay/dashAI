@@ -23,15 +23,10 @@ class BaseEvaluationStrategy(metaclass=ABCMeta):
 
     TYPE: Final[str] = "EvaluationStrategy"
 
-    # How this strategy divides the dataset. The frontend renders holdout
-    # controls or fold controls from this rather than comparing class names,
-    # which is what previously made a new strategy unreachable from the UI.
     KIND: str = "holdout"
-
-    # Which partitions this strategy records metrics for. Scoring the training
-    # partition means predicting on rows the model was fitted on, which is a
-    # fit statistic; a forecaster has no such thing to report.
     SCORED_SPLITS: tuple = (SplitEnum.TRAIN, SplitEnum.VALIDATION, SplitEnum.TEST)
+
+    FINAL_FIT_PARTITIONS: tuple = ("train",)
 
     @classmethod
     def get_metadata(cls) -> dict:
@@ -41,9 +36,16 @@ class BaseEvaluationStrategy(metaclass=ABCMeta):
         -------
         dict
             Mapping with ``kind``, which says whether this strategy splits the
-            dataset once or into folds.
+            dataset once or into folds, and ``scored_splits``, the partitions
+            it writes metrics for. A screen that offers one control per
+            partition reads the latter instead of assuming all three exist:
+            a forecasting strategy scores no training partition, so asking it
+            for train metrics finds nothing.
         """
-        return {"kind": cls.KIND}
+        return {
+            "kind": cls.KIND,
+            "scored_splits": [split.value for split in cls.SCORED_SPLITS],
+        }
 
     def __init__(
         self,
@@ -197,7 +199,7 @@ class BaseEvaluationStrategy(metaclass=ABCMeta):
 
         return model
 
-    def _generate_hpo_plots(self, run: Run) -> List[str]:
+    def _generate_hpo_plots(self, run: Run) -> List[Optional[str]]:
         """Generate and pickle the hyperparameter optimization plots to disk.
 
         Shared by every evaluation strategy that runs HPO, so the plot
@@ -208,14 +210,18 @@ class BaseEvaluationStrategy(metaclass=ABCMeta):
         run : Run
             The run the plots belong to (used for the plot filenames).
 
+        A plot the optimizer skipped keeps its slot rather than letting the
+        ones after it slide forward: the caller writes these paths into four
+        fixed columns of the run, by position.
+
         Returns
         -------
-        list[str]
+        list[str or None]
             Paths to the pickled plot files, in the order produced by the
-            optimizer.
+            optimizer. A slot is ``None`` where the optimizer reported that
+            the plot does not apply to this search.
         """
         config = di["config"]
-        plot_paths: List[str] = []
 
         # Retrieve optimization trial data from the optimizer
         trials = self.optimizer.get_trials_values()
@@ -229,15 +235,19 @@ class BaseEvaluationStrategy(metaclass=ABCMeta):
             goal_metric=self.goal_metric,
         )
 
+        filled = [index for index, plot in enumerate(plots) if plot is not None]
+
         # Convert plots to serializable format (handles special objects, arrays, etc.)
-        normalized_plots = normalize_artifacts(plots)
+        normalized_plots = normalize_artifacts([plots[index] for index in filled])
+
+        plot_paths: List[Optional[str]] = [None] * len(plots)
 
         # Serialize and persist each plot to disk
-        for filename, plot in zip(plot_filenames, normalized_plots, strict=False):
-            plot_path = os.path.join(config["RUNS_PATH"], filename)
+        for index, plot in zip(filled, normalized_plots, strict=False):
+            plot_path = os.path.join(config["RUNS_PATH"], plot_filenames[index])
             # Serialize the plot object using pickle and write to disk
             with open(plot_path, "wb") as file:
                 pickle.dump(plot, file)
-                plot_paths.append(plot_path)
+            plot_paths[index] = plot_path
 
         return plot_paths

@@ -7,7 +7,6 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
 import ComponentSelector from "../custom/ComponentSelector";
 import {
   useCredentialStatuses,
@@ -15,10 +14,8 @@ import {
 } from "../credentials/credentialStatus";
 import GenerativeBreadcrumbs from "./GenerativeBreadcrumbs";
 import { useCreateSession } from "./CreateSessionContext";
-import { useGenerative } from "./GenerativeContext";
 import StepperNavigationFooter from "../shared/StepperNavigationFooter";
 import { useTourContext } from "../tour/TourProvider";
-import RAGSessionSetup from "../../pages/generative/RAGSession/RAGSessionSetup";
 
 export default function CreateSessionCenter() {
   const { t } = useTranslation(["generative", "common"]);
@@ -46,38 +43,10 @@ export default function CreateSessionCenter() {
     handleCreate,
   } = useCreateSession();
 
-  const navigate = useNavigate();
-  const { sessions, setSessions } = useGenerative();
-
-  const handleSelectModelWithTour = useCallback(
-    (model) => {
-      handleSelectModel(model);
-      if (tourContext?.run) tourContext.nextStep();
-    },
-    [handleSelectModel, tourContext],
-  );
-
   const handleNextWithTour = useCallback(() => {
     if (tourContext?.run) tourContext.nextStep();
     handleNext();
   }, [handleNext, tourContext]);
-
-  const handleCreateWithTour = useCallback(() => {
-    if (tourContext?.run) tourContext.nextStep();
-    handleCreate();
-  }, [handleCreate, tourContext]);
-
-  const handleRagSessionCreated = useCallback(
-    (createdSession) => {
-      setSessions((prev) => [...prev, createdSession]);
-      navigate(`/app/generative/sessions/${createdSession.id}`);
-    },
-    [setSessions, navigate],
-  );
-
-  const handleRagClose = useCallback(() => {
-    handleBack();
-  }, [handleBack]);
 
   useEffect(() => {
     if (!tourContext?.run) return;
@@ -94,20 +63,34 @@ export default function CreateSessionCenter() {
   // gate reacts to an inline download without needing selectedModel to change.
   const selectedModelState =
     models.find((m) => m.name === selectedModel?.name) || selectedModel;
-  const selectedNeedsDownload =
-    Boolean(selectedModelState?.metadata?.requires_download) &&
-    !selectedModelState?.downloaded;
 
   // Credentials gate the same way downloads do: a model whose required
   // credentials are unmet cannot be used to create a session, even when it was
   // preselected via URL (which bypasses the disabled card in the selector).
   const { statuses, loaded } = useCredentialStatuses();
-  const { locked: selectedCredentialsLocked } = getComponentCredentialState(
-    selectedModelState || {},
-    statuses,
-    loaded,
+  const isModelUsable = useCallback(
+    (model) =>
+      !(Boolean(model?.metadata?.requires_download) && !model?.downloaded) &&
+      !getComponentCredentialState(model || {}, statuses, loaded).locked,
+    [statuses, loaded],
   );
-  const selectedUsable = !selectedNeedsDownload && !selectedCredentialsLocked;
+  const selectedUsable = isModelUsable(selectedModelState);
+
+  const handleSelectModelWithTour = useCallback(
+    (model) => {
+      handleSelectModel(model);
+      if (tourContext?.run && isModelUsable(model)) tourContext.nextStep();
+    },
+    [handleSelectModel, tourContext, isModelUsable],
+  );
+
+  useEffect(() => {
+    if (!tourContext?.run || !selectedModel || !selectedUsable) return;
+    const currentTarget = tourContext.steps?.[tourContext.stepIndex]?.target;
+    if (currentTarget === '[data-tour="model-card-qwen"]') {
+      tourContext.nextStep();
+    }
+  }, [selectedUsable]);
 
   const canGoNext = !!selectedModel && selectedUsable;
   const canCreate =
@@ -129,20 +112,18 @@ export default function CreateSessionCenter() {
       }}
     >
       <GenerativeBreadcrumbs />
-      {step === 1 && selectedModel?.task_name === "RAGTask" ? null : (
-        <Box sx={{ mb: 4 }}>
-          <Typography variant="h5" component="h2">
-            {step === 0
-              ? t("generative:label.selectModel")
-              : t("generative:label.configureSession")}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {step === 0
-              ? t("generative:label.pickAModelGroupedByTask")
-              : t("generative:label.nameAndDescribeYourSession")}
-          </Typography>
-        </Box>
-      )}
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h5" component="h2">
+          {step === 0
+            ? t("generative:label.selectModel")
+            : t("generative:label.configureSession")}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          {step === 0
+            ? t("generative:label.pickAModelGroupedByTask")
+            : t("generative:label.nameAndDescribeYourSession")}
+        </Typography>
+      </Box>
 
       <Box
         data-tour={step === 1 ? "session-config" : undefined}
@@ -182,12 +163,6 @@ export default function CreateSessionCenter() {
               tourDataMatchFn={(c) => c.name.toLowerCase().includes("qwen")}
             />
           )
-        ) : selectedModel?.task_name === "RAGTask" ? (
-          <RAGSessionSetup
-            onClose={handleRagClose}
-            onSessionCreated={handleRagSessionCreated}
-            existingSessions={sessions}
-          />
         ) : (
           <Stack spacing={4} sx={{ maxWidth: "100%" }}>
             <TextField
@@ -214,26 +189,24 @@ export default function CreateSessionCenter() {
         )}
       </Box>
 
-      {step === 1 && selectedModel?.task_name === "RAGTask" ? null : (
-        <StepperNavigationFooter
-          onBack={handleBack}
-          onNext={step === 0 ? handleNextWithTour : handleCreateWithTour}
-          backDisabled={submitting}
-          nextDisabled={step === 0 ? !canGoNext : !canCreate}
-          nextLabel={
-            step === 0 ? t("common:next") : t("generative:button.createSession")
-          }
-          loading={submitting}
-          variant={step === 0 ? "next" : "save"}
-          nextDataTour={
-            tourContext?.run
-              ? step === 0
-                ? "create-session-next"
-                : "create-session-button"
-              : null
-          }
-        />
-      )}
+      <StepperNavigationFooter
+        onBack={handleBack}
+        onNext={step === 0 ? handleNextWithTour : handleCreate}
+        backDisabled={submitting}
+        nextDisabled={step === 0 ? !canGoNext : !canCreate}
+        nextLabel={
+          step === 0 ? t("common:next") : t("generative:button.createSession")
+        }
+        loading={submitting}
+        variant={step === 0 ? "next" : "save"}
+        nextDataTour={
+          tourContext?.run
+            ? step === 0
+              ? "create-session-next"
+              : "create-session-button"
+            : null
+        }
+      />
     </Box>
   );
 }

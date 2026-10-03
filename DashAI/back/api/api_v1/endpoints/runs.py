@@ -16,6 +16,7 @@ from DashAI.back.dependencies.database.models import (
     Metric,
     ModelSession,
     Prediction,
+    Report,
     Run,
     RunStatus,
 )
@@ -235,6 +236,12 @@ async def get_hyperparameter_optimization_plot(
             else:
                 plot_path = run_model[0].plot_importance_path
 
+            if not plot_path:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Run hyperaparameter plot not found",
+                )
+
             with open(plot_path, "rb") as file:
                 plot = pickle.load(file)
 
@@ -293,6 +300,19 @@ async def upload_run(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Model session not found",
+                )
+            if model_session.preprocessing_status == "pending":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This session's preprocessing has not finished yet.",
+                )
+            if model_session.preprocessing_status == "failed":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "This session's preprocessing failed: "
+                        f"{model_session.preprocessing_error}"
+                    ),
                 )
             # REQUIRES_DOWNLOAD is the static contract; the download state is
             # reconciled against the filesystem so a model downloaded after
@@ -575,9 +595,13 @@ async def get_run_operations_count(
                 db.query(Prediction).filter(Prediction.run_id == run_id).count()
             )
 
+            # Count reports
+            reports_count = db.query(Report).filter(Report.run_id == run_id).count()
+
             return {
                 "explainers": global_explainers_count + local_explainers_count,
                 "predictions": predictions_count,
+                "reports": reports_count,
             }
         except exc.SQLAlchemyError as e:
             log.exception(e)
@@ -627,7 +651,20 @@ async def delete_run_operations(
                 "global_explainers": 0,
                 "local_explainers": 0,
                 "predictions": 0,
+                "reports": 0,
             }
+
+            # Delete reports: they describe the predictions of the fit
+            # being replaced, so a retrain must not leave them behind.
+            reports = db.query(Report).filter(Report.run_id == run_id).all()
+            for report in reports:
+                if report.artifacts_path and os.path.exists(report.artifacts_path):
+                    try:
+                        remove_path(report.artifacts_path)
+                    except Exception as e:
+                        log.warning(f"Failed to delete report file: {e}")
+                db.delete(report)
+                deleted_count["reports"] += 1
 
             # Delete global explainers
             global_explainers = (

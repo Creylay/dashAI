@@ -15,6 +15,7 @@ from DashAI.back.core.schema_fields import (
     string_field,
 )
 from DashAI.back.core.utils import MultilingualString
+from DashAI.back.splitters.rules import SEED_ONLY_MATTERS_WHEN_SHUFFLING
 
 from .fold_splitter import FoldSplitter, sklearn_random_state
 
@@ -79,26 +80,15 @@ class StratifiedGroupKFoldSplitterSchema(BaseSchema):
         bool_field(),
         placeholder=True,
         description=MultilingualString(
-            en=(
-                "Whether to shuffle each group's samples before splitting. When "
-                "shuffling is disabled, the random state has no effect."
-            ),
-            es=(
-                "Si se deben mezclar las muestras de cada grupo antes de dividir. "
-                "Cuando la mezcla está desactivada, el estado aleatorio no tiene "
-                "efecto."
-            ),
+            en=("Whether to shuffle each group's samples before splitting."),
+            es=("Si se deben mezclar las muestras de cada grupo antes de dividir."),
             pt=(
-                "Se as amostras de cada grupo devem ser embaralhadas antes de "
-                "dividir. Quando o embaralhamento está desativado, o estado aleatório "
-                "não tem efeito."
+                "Se as amostras de cada grupo devem ser embaralhadas antes de dividir."
             ),
             de=(
-                "Ob die Proben jeder Gruppe vor der Aufteilung gemischt werden "
-                "sollen. Wenn das Mischen deaktiviert ist, hat der Zufallszustand "
-                "keine Wirkung."
+                "Ob die Proben jeder Gruppe vor der Aufteilung gemischt werden sollen."
             ),
-            zh="划分前是否打乱每个分组内的样本。关闭打乱时，随机状态不起作用。",
+            zh="划分前是否打乱每个分组内的样本。",
         ),
         alias=MultilingualString(
             en="Shuffle", es="Mezclar", pt="Embaralhar", de="Mischen", zh="打乱"
@@ -108,24 +98,11 @@ class StratifiedGroupKFoldSplitterSchema(BaseSchema):
         int_field(ge=0),
         placeholder=42,
         description=MultilingualString(
-            en=(
-                "Seed used to make the split reproducible when shuffle is enabled. It "
-                "is ignored when shuffling is disabled."
-            ),
-            es=(
-                "Semilla utilizada para que la división sea reproducible cuando se "
-                "activa la mezcla. Se ignora cuando la mezcla está desactivada."
-            ),
-            pt=(
-                "Semente usada para tornar a divisão reproduzível quando o "
-                "embaralhamento está ativado. É ignorada quando o embaralhamento está "
-                "desativado."
-            ),
-            de=(
-                "Seed, um die Aufteilung reproduzierbar zu machen, wenn Mischen "
-                "aktiviert ist. Wird ignoriert, wenn das Mischen deaktiviert ist."
-            ),
-            zh="启用打乱时，用于使划分可复现的随机种子。关闭打乱时将被忽略。",
+            en=("Seed used to make the split reproducible."),
+            es=("Semilla utilizada para que la división sea reproducible."),
+            pt=("Semente usada para tornar a divisão reproduzível."),
+            de=("Seed, um die Aufteilung reproduzierbar zu machen."),
+            zh="用于使划分可复现的随机种子。",
         ),
         alias=MultilingualString(
             en="Random state",
@@ -194,6 +171,10 @@ class StratifiedGroupKFoldSplitterSchema(BaseSchema):
         ),
     )  # type: ignore
 
+    # The same dependency as every other splitter that takes a seed, declared
+    # once in splitters/rules.py instead of copied here.
+    rules = [SEED_ONLY_MATTERS_WHEN_SHUFFLING]
+
 
 class StratifiedGroupKFoldSplitter(FoldSplitter):
     """Splitter that preserves both class balance and group membership in each fold.
@@ -224,6 +205,45 @@ class StratifiedGroupKFoldSplitter(FoldSplitter):
     )
     COMPATIBLE_INNER_SPLITTERS = ["GroupKFoldSplitter", "StratifiedGroupKFoldSplitter"]
     SCHEMA = StratifiedGroupKFoldSplitterSchema
+    DESCRIPTION = MultilingualString(
+        en=(
+            "K folds that keep whole groups on one side and still "
+            "approximate the class balance of the full dataset. Use it "
+            "when rows share a subject and a class is also rare. This "
+            "changes which rows land in each fold, not how many, and the "
+            "rows held out of the folds are whole groups."
+        ),
+        es=(
+            "K pliegues que mantienen cada grupo entero de un solo lado y "
+            "aun asi aproximan el balance de clases del conjunto "
+            "completo. Usalo cuando las filas comparten sujeto y ademas "
+            "hay una clase poco frecuente. Esto cambia que filas caen en "
+            "cada pliegue, no cuantas, y las filas reservadas fuera de "
+            "los pliegues son grupos enteros."
+        ),
+        pt=(
+            "K dobras que mantem cada grupo inteiro de um so lado e ainda "
+            "aproximam o balanco de classes do conjunto completo. Use "
+            "quando as linhas compartilham um sujeito e ha tambem uma "
+            "classe rara. Isso muda quais linhas caem em cada dobra, nao "
+            "quantas, e as linhas reservadas fora das dobras sao grupos "
+            "inteiros."
+        ),
+        de=(
+            "K Folds, die ganze Gruppen auf einer Seite halten und dabei "
+            "die Klassenverteilung des gesamten Datensatzes annaehernd "
+            "erhalten. Sinnvoll, wenn Zeilen ein Subjekt teilen und "
+            "zugleich eine Klasse selten ist. Das aendert, welche Zeilen "
+            "in welchen Fold fallen, nicht wie viele, und die "
+            "zurueckgelegten Zeilen sind ganze Gruppen."
+        ),
+        zh=(
+            "k 个折既把整组保留在同一边，又尽量接近完整数据集的类别"
+            "比例。当多行共享同一对象且某类别又罕见时使用。这改变的是"
+            "哪些行落入每一折，而不是有多少行，预留出来的行都是完整的"
+            "组。"
+        ),
+    )
 
     def __init__(self, splits_data):
         """Initialize the stratified group-based K-fold splitter.

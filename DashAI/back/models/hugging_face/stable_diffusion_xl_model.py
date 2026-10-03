@@ -12,6 +12,10 @@ from DashAI.back.core.utils import MultilingualString
 from DashAI.back.dependencies.downloads.downloadable import (
     HFPretrainedDownloadMixin,
 )
+from DashAI.back.models.hugging_face.diffusion_memory import (
+    GpuMemoryModeField,
+    place_pipeline,
+)
 from DashAI.back.models.text_to_image_generation_model import (
     TextToImageGenerationTaskModel,
 )
@@ -71,7 +75,7 @@ class StableDiffusionXLSchema(BaseSchema):
                 zh="负面提示词",
             ),
         )  # type: ignore
-    ]
+    ] = None
 
     num_inference_steps: schema_field(
         int_field(ge=1),
@@ -202,6 +206,8 @@ class StableDiffusionXLSchema(BaseSchema):
         ),
     )  # type: ignore
 
+    gpu_memory_mode: GpuMemoryModeField = "auto"  # type: ignore
+
     seed: schema_field(
         int_field(),
         placeholder=-1,
@@ -240,7 +246,7 @@ class StableDiffusionXLSchema(BaseSchema):
     )  # type: ignore
 
     width: schema_field(
-        int_field(ge=64, le=2048),
+        int_field(ge=64, le=2048, multiple_of=8),
         placeholder=1024,
         description=MultilingualString(
             en=(
@@ -274,7 +280,7 @@ class StableDiffusionXLSchema(BaseSchema):
     )  # type: ignore
 
     height: schema_field(
-        int_field(ge=64, le=2048),
+        int_field(ge=64, le=2048, multiple_of=8),
         placeholder=1024,
         description=MultilingualString(
             en=(
@@ -442,7 +448,10 @@ class StableDiffusionXLGenerationModel(
             torch_dtype=torch.float16 if use_gpu else torch.float32,
             use_safetensors=True,
             variant="fp16" if use_gpu else None,
-        ).to(self.device)
+        )
+        self.model = place_pipeline(
+            self.model, self.device, kwargs.get("gpu_memory_mode")
+        )
 
         self.negative_prompt = kwargs.get("negative_prompt")
         self.num_inference_steps = kwargs.get("num_inference_steps")
