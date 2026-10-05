@@ -1,0 +1,210 @@
+# TEMPORARY: builds test installers to try the in-app updater end to end.
+# Lives only on the test/update-e2e branch of a fork and is never merged.
+#
+# Builds the Windows, macOS ARM64 and Linux installers with the version in
+# .github/test-update.env, pointing the updater at this repository's releases,
+# and publishes them as a release of this repository. Every job is skipped in
+# the official repository.
+
+name: Test update build
+
+on:
+  push:
+    branches:
+      - test/update-e2e
+  workflow_dispatch:
+
+jobs:
+  react-build:
+    if: github.repository != 'DashAISoftware/DashAI'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: DashAI/front
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable Corepack and use Yarn 3
+        run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18.x"
+          cache: "yarn"
+          cache-dependency-path: DashAI/front/yarn.lock
+      - name: Install and build
+        run: |
+          yarn install --frozen-lockfile
+          yarn build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: react-build
+          path: DashAI/front/build
+          retention-days: 1
+
+  build-windows:
+    if: github.repository != 'DashAISoftware/DashAI'
+    needs: react-build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load test version
+        shell: bash
+        run: cat .github/test-update.env >> "$GITHUB_ENV"
+      - name: Stamp test version and repository
+        shell: bash
+        run: python .github/test-update/prepare.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: react-build
+          path: DashAI/front/build
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # --frozen instead of --locked: the stamped version no longer matches
+      # the version recorded in uv.lock.
+      - name: Install dependencies (CPU-only)
+        run: |
+          uv sync --frozen --extra cpu --no-dev
+          uv pip install pyinstaller
+      - name: Build executable
+        shell: cmd
+        run: uv run --no-sync pyinstaller --clean --noconfirm dashai.spec
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+      - name: Build Windows Installer
+        shell: cmd
+        run: |
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=%TEST_VERSION% installer/installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: installer/dashAI-Installer.exe
+          retention-days: 1
+
+  build-macos-arm64:
+    if: github.repository != 'DashAISoftware/DashAI'
+    needs: react-build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load test version
+        run: cat .github/test-update.env >> "$GITHUB_ENV"
+      - name: Stamp test version and repository
+        run: python3 .github/test-update/prepare.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: react-build
+          path: DashAI/front/build
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install dependencies (CPU-only)
+        run: |
+          uv sync --frozen --extra cpu --no-dev
+          uv pip install pyinstaller
+          brew install create-dmg
+      - name: Build ARM64 App Bundle
+        run: uv run --no-sync pyinstaller --clean --noconfirm dashai.spec
+      - name: Sign App Bundle (ad-hoc)
+        run: codesign --force --deep --sign - dist/dashAI.app
+      - name: Create DMG
+        run: |
+          create-dmg \
+            --volname "dashAI Installer" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --app-drop-link 600 185 \
+            --hide-extension "dashAI.app" \
+            --no-internet-enable \
+            "dashAI-macos-arm64.dmg" \
+            "dist/dashAI.app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dashAI-macos-arm64.dmg
+          retention-days: 1
+
+  build-linux-appimage:
+    if: github.repository != 'DashAISoftware/DashAI'
+    needs: react-build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load test version
+        run: cat .github/test-update.env >> "$GITHUB_ENV"
+      - name: Stamp test version and repository
+        run: python3 .github/test-update/prepare.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: react-build
+          path: DashAI/front/build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install python-appimage
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 imagemagick librsvg2-bin
+      - name: Build wheel (frontend bundled)
+        run: uv build --wheel
+      - name: Prepare AppImage recipe
+        run: |
+          rsvg-convert -h 512 DashAI/front/public/dashai-isotype.svg -o /tmp/dashai-isotype.png
+          convert /tmp/dashai-isotype.png -background none -gravity center -extent 512x512 appimage/dashai.png
+          WHEEL=$(ls "$PWD"/dist/*.whl | head -n1)
+          echo "$WHEEL" >> appimage/requirements.txt
+      - name: Build AppImage
+        env:
+          PIP_INDEX_URL: https://download.pytorch.org/whl/cpu
+          PIP_EXTRA_INDEX_URL: "https://pypi.org/simple https://abetlen.github.io/llama-cpp-python/whl/cpu"
+        run: python-appimage build app -p 3.12 appimage/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dashAI-x86_64.AppImage
+          retention-days: 1
+
+  release:
+    if: github.repository != 'DashAISoftware/DashAI'
+    needs:
+      - build-windows
+      - build-macos-arm64
+      - build-linux-appimage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load test version
+        run: cat .github/test-update.env >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      # Same file names as the official release workflow, which is what the
+      # updater looks for.
+      - name: Stage release files
+        run: |
+          V="$TEST_VERSION"
+          mkdir -p release
+          cp artifacts/windows/dashAI-Installer.exe        "release/dashAI-${V}-x64-windows.exe"
+          cp artifacts/macos-arm64/dashAI-macos-arm64.dmg  "release/dashAI-${V}-arm-osx.dmg"
+          cp artifacts/linux-appimage/dashAI-x86_64.AppImage "release/dashAI-${V}-x64-linux.AppImage"
+      # A pre-release is never returned as "latest", so the version to install
+      # first is published as one and the newer version as the latest release.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.TEST_VERSION }}
+          name: Test v${{ env.TEST_VERSION }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            Test build of the in-app updater (branch test/update-e2e).
+
+            - Example change shown in the release notes
+          prerelease: ${{ env.TEST_PRERELEASE == 'true' }}
+          make_latest: ${{ env.TEST_PRERELEASE == 'true' && 'false' || 'true' }}
+          fail_on_unmatched_files: true
+          files: release/*
